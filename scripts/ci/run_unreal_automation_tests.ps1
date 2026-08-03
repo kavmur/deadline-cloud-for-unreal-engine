@@ -97,14 +97,14 @@ try {
     )
     $testSelection = $testPrefixes -join "+"
     $arguments = @(
-        $project.FullName,
+        "`"$($project.FullName)`"",
         "-RenderOffScreen",
         "-unattended",
         "-nosplash",
         "-NoSound",
         "-SCCProvider=None",
-        "-ExecCmds=Automation RunTests $testSelection",
-        "-testexit=Automation Test Queue Empty",
+        "`"-ExecCmds=Automation RunTests $testSelection`"",
+        "`"-testexit=Automation Test Queue Empty`"",
         "-log"
     )
 
