@@ -28,6 +28,7 @@ unreal_mock = MagicMock()
 sys.modules["unreal"] = unreal_mock
 
 from deadline.unreal_submitter.unreal_open_job.unreal_open_job import (  # noqa: E402
+    ProfilingSettings,
     UnrealOpenJob,
     RenderUnrealOpenJob,
     P4RenderUnrealOpenJob,
@@ -35,7 +36,11 @@ from deadline.unreal_submitter.unreal_open_job.unreal_open_job import (  # noqa:
     UnrealOpenJobParameterDefinition,
     TransferProjectFilesStrategy,
 )
+from deadline.unreal_submitter.unreal_open_job.unreal_open_job_entity import (  # noqa: E402
+    OpenJobParameterNames,
+)
 from deadline.unreal_submitter import exceptions  # noqa: E402
+from deadline.unreal_cmd_utils import parse_command_line  # noqa: E402
 
 
 class TestUnrealOpenJobStepParameterDefinition:
@@ -743,6 +748,127 @@ class TestRenderUnrealOpenJob:
             1 for e in job._environments if isinstance(e, InstallMarketplacePluginsEnvironment)
         )
         assert count == 1
+
+    def test_profiling_settings_from_u_deadline_cloud_profiling_settings(self):
+        class FakeProfilingStruct:
+            def get_editor_property(self, name):
+                values = {
+                    "bInsightsCpu": True,
+                    "bInsightsGpu": True,
+                    "bInsightsMemory": False,
+                    "bCsvProfiler": True,
+                    "CsvCaptureFrames": 120,
+                }
+                return values[name]
+
+        profiling_settings = ProfilingSettings.from_u_deadline_cloud_profiling_settings(
+            FakeProfilingStruct()
+        )
+
+        assert profiling_settings.insights_cpu is True
+        assert profiling_settings.insights_gpu is True
+        assert profiling_settings.insights_memory is False
+        assert profiling_settings.csv_profiler is True
+        assert profiling_settings.csv_capture_frames == 120
+
+    @patch(
+        "deadline.unreal_submitter.unreal_open_job.unreal_open_job_entity."
+        "UnrealOpenJobEntity.get_template_object",
+        return_value={
+            "parameterDefinitions": [
+                {"name": OpenJobParameterNames.UNREAL_EXTRA_CMD_ARGS, "type": "STRING"},
+                {"name": OpenJobParameterNames.UNREAL_EXTRA_CMD_ARGS_FILE, "type": "PATH"},
+                {"name": OpenJobParameterNames.UNREAL_PROJECT_PATH, "type": "PATH"},
+                {"name": OpenJobParameterNames.MARKETPLACE_PLUGINS_DIR, "type": "PATH"},
+            ]
+        },
+    )
+    @patch(
+        "deadline.unreal_submitter.unreal_open_job.unreal_open_job.common.get_in_process_executor_cmd_args",
+        return_value=["-stdout", "-trace=gpu"],
+    )
+    @patch(
+        "deadline.unreal_submitter.unreal_open_job.unreal_open_job.common.get_project_file_path",
+        return_value="/project/MyProject.uproject",
+    )
+    @patch(
+        "deadline.unreal_submitter.unreal_open_job.unreal_open_job.common.create_deadline_cloud_temp_file",
+        return_value="/tmp/ExtraCmdArgsFile.txt",
+    )
+    @patch.object(
+        UnrealOpenJob,
+        "get_marketplace_plugins_dir",
+        return_value="/Engine/Plugins/Marketplace",
+    )
+    def test__build_parameter_values_merges_profiling_cmd_args(
+        self,
+        get_marketplace_plugins_dir_mock,
+        create_deadline_cloud_temp_file_mock,
+        get_project_file_path_mock,
+        get_in_process_executor_cmd_args_mock,
+        get_template_object_mock,
+    ):
+        render_job = RenderUnrealOpenJob(
+            file_path="",
+            name="JobA",
+            extra_parameters=[
+                UnrealOpenJobParameterDefinition(
+                    OpenJobParameterNames.UNREAL_EXTRA_CMD_ARGS,
+                    "STRING",
+                    '-execcmds="stat fps" -trace=cpu,frame',
+                )
+            ],
+            profiling_settings=ProfilingSettings(
+                insights_cpu=True,
+                insights_memory=True,
+                csv_profiler=True,
+                csv_capture_frames=120,
+            ),
+        )
+
+        parameter_values = render_job._build_parameter_values()
+        file_data = create_deadline_cloud_temp_file_mock.call_args.kwargs["file_data"]
+        _, switches, params = parse_command_line(file_data)
+
+        assert {
+            p["name"]: p["value"] for p in parameter_values
+        }[OpenJobParameterNames.UNREAL_EXTRA_CMD_ARGS] == ""
+        assert {
+            p["name"]: p["value"] for p in parameter_values
+        }[OpenJobParameterNames.UNREAL_EXTRA_CMD_ARGS_FILE] == "/tmp/ExtraCmdArgsFile.txt"
+        assert {
+            p["name"]: p["value"] for p in parameter_values
+        }[OpenJobParameterNames.UNREAL_PROJECT_PATH] == "/project/MyProject.uproject"
+        assert {
+            p["name"]: p["value"] for p in parameter_values
+        }[OpenJobParameterNames.MARKETPLACE_PLUGINS_DIR] == "/Engine/Plugins/Marketplace"
+        assert set(switches) == {"stdout", "csvGpuStats"}
+        assert params["trace"] == "gpu,cpu,frame,bookmark,loadtime,memory"
+        assert params["csvCaptureFrames"] == "120"
+        assert "ExecCmds" not in params
+        assert "/tmp/ExtraCmdArgsFile.txt" in render_job._asset_references.input_filenames
+
+    def test_get_asset_references_adds_profiling_output_directories(self):
+        render_job = RenderUnrealOpenJob.__new__(RenderUnrealOpenJob)
+        render_job._transfer_files_strategy = None
+        render_job._mrq_job = None
+        render_job._extra_parameters = []
+        render_job._profiling_settings = ProfilingSettings(
+            insights_cpu=True, csv_profiler=True, csv_capture_frames=60
+        )
+
+        refs = AssetReferences()
+        with patch.object(UnrealOpenJob, "get_asset_references", return_value=refs):
+            with patch(
+                "deadline.unreal_submitter.unreal_open_job.unreal_open_job.common.get_project_directory",
+                return_value="/project",
+            ):
+                result = render_job.get_asset_references()
+
+        assert result.output_directories == {
+            "/project/Saved/Profiling",
+            "/project/Saved/Profiling/CSV",
+        }
 
 
 class TestP4RenderUnrealOpenJobSubmitModeSkipsJA:

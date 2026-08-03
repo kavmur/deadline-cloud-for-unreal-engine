@@ -132,6 +132,122 @@ class UnrealOpenJobParameterDefinition:
         return asdict(self)
 
 
+@dataclass
+class ProfilingSettings:
+    insights_cpu: bool = False
+    insights_gpu: bool = False
+    insights_memory: bool = False
+    csv_profiler: bool = False
+    csv_capture_frames: int = 300
+
+    @staticmethod
+    def _read_unreal_property(source: Any, *property_names: str):
+        getter = getattr(source, "get_editor_property", None)
+        for property_name in property_names:
+            if hasattr(source, property_name):
+                return getattr(source, property_name)
+            if getter:
+                try:
+                    return getter(property_name)
+                except Exception:
+                    continue
+        return None
+
+    @staticmethod
+    def _coerce_bool(value: Any, default: bool = False) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, int) and not isinstance(value, bool):
+            return bool(value)
+        return default
+
+    @staticmethod
+    def _coerce_int(value: Any, default: int) -> int:
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+        return default
+
+    @classmethod
+    def from_u_deadline_cloud_profiling_settings(
+        cls, profiling_settings: Optional[unreal.DeadlineCloudProfilingSettingsStruct]
+    ) -> "ProfilingSettings":
+        if profiling_settings is None:
+            return cls()
+
+        return cls(
+            insights_cpu=cls._coerce_bool(
+                cls._read_unreal_property(
+                    profiling_settings, "insights_cpu", "b_insights_cpu", "bInsightsCpu"
+                )
+            ),
+            insights_gpu=cls._coerce_bool(
+                cls._read_unreal_property(
+                    profiling_settings, "insights_gpu", "b_insights_gpu", "bInsightsGpu"
+                )
+            ),
+            insights_memory=cls._coerce_bool(
+                cls._read_unreal_property(
+                    profiling_settings,
+                    "insights_memory",
+                    "b_insights_memory",
+                    "bInsightsMemory",
+                )
+            ),
+            csv_profiler=cls._coerce_bool(
+                cls._read_unreal_property(
+                    profiling_settings, "csv_profiler", "b_csv_profiler", "bCsvProfiler"
+                )
+            ),
+            csv_capture_frames=max(
+                1,
+                cls._coerce_int(
+                    cls._read_unreal_property(
+                        profiling_settings, "csv_capture_frames", "CsvCaptureFrames"
+                    ),
+                    300,
+                ),
+            ),
+        )
+
+    def is_insights_enabled(self) -> bool:
+        return self.insights_cpu or self.insights_gpu or self.insights_memory
+
+    def is_enabled(self) -> bool:
+        return self.is_insights_enabled() or self.csv_profiler
+
+    def build_cmd_args(self) -> str:
+        trace_categories = OrderedDict()
+        if self.insights_cpu:
+            for category in ("cpu", "frame", "bookmark", "loadtime"):
+                trace_categories.setdefault(category, category)
+        if self.insights_gpu:
+            trace_categories.setdefault("gpu", "gpu")
+        if self.insights_memory:
+            trace_categories.setdefault("memory", "memory")
+
+        cmd_args = []
+        if trace_categories:
+            cmd_args.append(f'-trace={",".join(trace_categories.values())}')
+        if self.csv_profiler:
+            cmd_args.extend(
+                [
+                    "-csvGpuStats",
+                    f"-csvCaptureFrames={max(1, self.csv_capture_frames)}",
+                ]
+            )
+
+        return " ".join(cmd_args)
+
+    def get_output_directories(self, project_directory: str) -> list[str]:
+        profiling_root = f"{project_directory.rstrip('/')}/Saved/Profiling"
+        output_directories = []
+        if self.is_insights_enabled():
+            output_directories.append(profiling_root)
+        if self.csv_profiler:
+            output_directories.append(f"{profiling_root}/CSV")
+        return output_directories
+
+
 # Base Open Job implementation
 class UnrealOpenJob(UnrealOpenJobEntity):
     """
@@ -657,6 +773,7 @@ class RenderUnrealOpenJob(UnrealOpenJob):
         environments: Optional[list[UnrealOpenJobEnvironment]] = None,
         extra_parameters: Optional[list[UnrealOpenJobParameterDefinition]] = None,
         job_shared_settings: Optional[JobSharedSettings] = None,
+        profiling_settings: Optional[ProfilingSettings] = None,
         asset_references: Optional[AssetReferences] = None,
         mrq_job: Optional[unreal.MoviePipelineExecutorJob] = None,
     ):
@@ -681,6 +798,9 @@ class RenderUnrealOpenJob(UnrealOpenJob):
         :param job_shared_settings: JobSharedSettings instance
         :type job_shared_settings: JobSharedSettings
 
+        :param profiling_settings: ProfilingSettings instance
+        :type profiling_settings: ProfilingSettings
+
         :param asset_references: AssetReferences object
         :type asset_references: AssetReferences
 
@@ -696,6 +816,7 @@ class RenderUnrealOpenJob(UnrealOpenJob):
             job_shared_settings,
             asset_references,
         )
+        self._profiling_settings = profiling_settings or ProfilingSettings()
 
         self._mrq_job = None
         if mrq_job:
@@ -723,6 +844,14 @@ class RenderUnrealOpenJob(UnrealOpenJob):
     @property
     def mrq_job(self):
         return self._mrq_job
+
+    @property
+    def profiling_settings(self) -> ProfilingSettings:
+        return getattr(self, "_profiling_settings", ProfilingSettings())
+
+    @profiling_settings.setter
+    def profiling_settings(self, value: ProfilingSettings):
+        self._profiling_settings = value or ProfilingSettings()
 
     @mrq_job.setter
     def mrq_job(self, value):
@@ -767,6 +896,11 @@ class RenderUnrealOpenJob(UnrealOpenJob):
         ):
             self.job_shared_settings = JobSharedSettings.from_u_deadline_cloud_job_shared_settings(
                 self._mrq_job.preset_overrides.job_shared_settings
+            )
+
+        if self._mrq_job is not None and self._mrq_job.preset_overrides is not None:
+            self.profiling_settings = ProfilingSettings.from_u_deadline_cloud_profiling_settings(
+                getattr(self._mrq_job.preset_overrides, "profiling_settings", None)
             )
 
         # Job name set order:
@@ -822,6 +956,7 @@ class RenderUnrealOpenJob(UnrealOpenJob):
             environments.append(job_env)
 
         shared_settings = data_asset.job_preset_struct.job_shared_settings
+        profiling_settings = getattr(data_asset.job_preset_struct, "profiling_settings", None)
 
         result_job = cls(
             file_path=data_asset.path_to_template.file_path,
@@ -834,6 +969,9 @@ class RenderUnrealOpenJob(UnrealOpenJob):
             ],
             job_shared_settings=JobSharedSettings.from_u_deadline_cloud_job_shared_settings(
                 shared_settings
+            ),
+            profiling_settings=ProfilingSettings.from_u_deadline_cloud_profiling_settings(
+                profiling_settings
             ),
         )
 
@@ -1330,8 +1468,11 @@ class RenderUnrealOpenJob(UnrealOpenJob):
         if args_from_file:
             user_extra_cmd_args = merge_cmd_args_with_priority(user_extra_cmd_args, args_from_file)
         executor_cmd_args = self.get_executor_cmd_args()
+        profiling_cmd_args = self.get_profiling_cmd_args()
 
         merged_cmd_args = merge_cmd_args_with_priority(user_extra_cmd_args, executor_cmd_args)
+        if profiling_cmd_args:
+            merged_cmd_args = merge_cmd_args_with_priority(profiling_cmd_args, merged_cmd_args)
         merged_cmd_args = self.clear_cmd_args(merged_cmd_args)
 
         unfilled_parameter_values = RenderUnrealOpenJob.update_job_parameter_values(
@@ -1396,6 +1537,13 @@ class RenderUnrealOpenJob(UnrealOpenJob):
             cmd_args.extend(common.get_mrq_job_cmd_args(self._mrq_job))
 
         return " ".join(a for a in cmd_args)
+
+    def get_profiling_cmd_args(self) -> str:
+        """
+        Returns profiler-specific command line arguments derived from the MRQ preset settings.
+        """
+
+        return self.profiling_settings.build_cmd_args()
 
     def get_user_extra_cmd_args(self) -> str:
         """
@@ -1603,6 +1751,16 @@ class RenderUnrealOpenJob(UnrealOpenJob):
 
         return output_directories
 
+    def _get_profiling_output_directories(self) -> list[str]:
+        """
+        Get profiling output directories implied by the current profiling settings.
+
+        :return: List of profiling output directories
+        :rtype: list[str]
+        """
+
+        return self.profiling_settings.get_output_directories(common.get_project_directory())
+
     def _get_mrq_job_output_directory(self) -> str:
         """
         Get the output directory path from  MRQ Job Configuration, resolve all possible tokens
@@ -1664,6 +1822,8 @@ class RenderUnrealOpenJob(UnrealOpenJob):
 
             # Render output path
             asset_references.output_directories.add(self._get_mrq_job_output_directory())
+
+        asset_references.output_directories.update(self._get_profiling_output_directories())
 
         # When SubmitMode is set on a Perforce job template, render outputs are
         # delivered to Perforce and MUST NOT be re-uploaded to S3 as Job
