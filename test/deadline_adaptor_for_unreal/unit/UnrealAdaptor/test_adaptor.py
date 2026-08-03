@@ -313,6 +313,92 @@ class TestUnrealAdaptor_on_start:
         assert extra_cmd_arg in launch_args
         assert unreal_client_path in launch_args[-1]
 
+    @patch("time.strftime", return_value="deadline-cloud-insights-20260803-220000.utrace")
+    @patch("os.path.exists", return_value=True)
+    @patch(
+        "deadline.unreal_adaptor.UnrealAdaptor.adaptor.UnrealAdaptor.unreal_client_path",
+        new_callable=PropertyMock,
+    )
+    @patch(
+        "deadline.unreal_adaptor.UnrealAdaptor.adaptor.UnrealAdaptor._get_regex_callbacks",
+        return_value=[],
+    )
+    @patch("deadline.unreal_adaptor.UnrealAdaptor.adaptor.logger")
+    @patch("deadline.unreal_adaptor.UnrealAdaptor.adaptor.UnrealSubprocessWithLogs")
+    def test__start_unreal_client_adds_tracefile_for_trace_capture(
+        self,
+        mock_subprocess: Mock,
+        mock_logger: Mock,
+        mock_get_regex_callbacks: Mock,
+        mock_unreal_client_path: Mock,
+        mock_os_path_exists: Mock,
+        mock_strftime: Mock,
+        init_data: dict,
+    ):
+        unreal_client_path = "UnrealClient.py"
+        mock_unreal_client_path.side_effect = [unreal_client_path]
+        init_data["extra_cmd_args_file"] = "path/to/args/file.txt"
+        adaptor = UnrealAdaptor(init_data)
+
+        with patch(
+            "builtins.open",
+            new_callable=mock_open,
+            read_data="-trace=cpu,frame,bookmark,loadtime",
+        ):
+            adaptor._start_unreal_client()
+
+        launch_ue_with_message = (
+            mock_logger.mock_calls[1].args[0].replace("Starting Unreal Engine with args: ", "")
+        )
+        launch_args = ast.literal_eval(launch_ue_with_message)
+
+        assert any(arg.startswith("-trace=") for arg in launch_args)
+        assert (
+            "-tracefile=C:/LocalProjects/AWS_RND/Saved/Profiling/DeadlineCloud/"
+            "deadline-cloud-insights-20260803-220000.utrace"
+        ) in launch_args
+
+    @patch("os.path.exists", return_value=True)
+    @patch(
+        "deadline.unreal_adaptor.UnrealAdaptor.adaptor.UnrealAdaptor.unreal_client_path",
+        new_callable=PropertyMock,
+    )
+    @patch(
+        "deadline.unreal_adaptor.UnrealAdaptor.adaptor.UnrealAdaptor._get_regex_callbacks",
+        return_value=[],
+    )
+    @patch("deadline.unreal_adaptor.UnrealAdaptor.adaptor.logger")
+    @patch("deadline.unreal_adaptor.UnrealAdaptor.adaptor.UnrealSubprocessWithLogs")
+    def test__start_unreal_client_preserves_explicit_tracefile(
+        self,
+        mock_subprocess: Mock,
+        mock_logger: Mock,
+        mock_get_regex_callbacks: Mock,
+        mock_unreal_client_path: Mock,
+        mock_os_path_exists: Mock,
+        init_data: dict,
+    ):
+        unreal_client_path = "UnrealClient.py"
+        mock_unreal_client_path.side_effect = [unreal_client_path]
+        init_data["extra_cmd_args_file"] = "path/to/args/file.txt"
+        adaptor = UnrealAdaptor(init_data)
+        explicit_tracefile = "-tracefile=C:/Custom/trace.utrace"
+
+        with patch(
+            "builtins.open",
+            new_callable=mock_open,
+            read_data=f"-trace=cpu,frame {explicit_tracefile}",
+        ):
+            adaptor._start_unreal_client()
+
+        launch_ue_with_message = (
+            mock_logger.mock_calls[1].args[0].replace("Starting Unreal Engine with args: ", "")
+        )
+        launch_args = ast.literal_eval(launch_ue_with_message)
+
+        assert explicit_tracefile in launch_args
+        assert len([arg for arg in launch_args if arg.startswith("-tracefile=")]) == 1
+
     @patch("os.path.exists", return_value=True)
     @patch(
         "deadline.unreal_adaptor.UnrealAdaptor.adaptor.UnrealAdaptor.unreal_client_path",
