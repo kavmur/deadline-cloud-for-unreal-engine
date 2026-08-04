@@ -18,8 +18,6 @@ $runRoot = "C:\UnrealCI\runs\$RunId"
 $resultRoot = Join-Path $runRoot "results"
 $stdoutPath = Join-Path $resultRoot "UnrealEditor.stdout.log"
 $stderrPath = Join-Path $resultRoot "UnrealEditor.stderr.log"
-$warmupStdoutPath = Join-Path $resultRoot "UnrealEditor.warmup.stdout.log"
-$warmupStderrPath = Join-Path $resultRoot "UnrealEditor.warmup.stderr.log"
 $transcriptPath = Join-Path $resultRoot "runner.log"
 $resultPath = Join-Path $resultRoot "result.json"
 
@@ -34,12 +32,6 @@ $failureMessage = $null
 try {
     if (-not (Test-Path $editor)) {
         throw "UE 5.6 editor was not found at $editor"
-    }
-
-    $project = Get-ChildItem "C:\UnrealCI\MeerkatDemo" -Filter "MeerkatDemo.uproject" -File -Recurse |
-        Select-Object -First 1
-    if (-not $project) {
-        throw "The baked MeerkatDemo fixture was not found under C:\UnrealCI\MeerkatDemo"
     }
 
     Get-Process "UnrealEditor", "UnrealEditor-Cmd" -ErrorAction SilentlyContinue |
@@ -76,6 +68,15 @@ try {
         throw "The Unreal AutomationTool log contains a C++ compiler error"
     }
 
+    $fixtureRoot = Join-Path $SourceRoot "scripts\ci\fixtures\MeerkatDemo-CI"
+    $ciProjectRoot = Join-Path $runRoot "MeerkatDemo-CI"
+    if (-not (Test-Path (Join-Path $fixtureRoot "MeerkatDemo.uproject"))) {
+        throw "The stripped MeerkatDemo CI fixture was not found at $fixtureRoot"
+    }
+    Remove-Item $ciProjectRoot -Recurse -Force -ErrorAction SilentlyContinue
+    Copy-Item $fixtureRoot $ciProjectRoot -Recurse -Force
+    $project = Get-Item (Join-Path $ciProjectRoot "MeerkatDemo.uproject")
+
     $logDirectory = Join-Path $project.DirectoryName "Saved\Logs"
     if (Test-Path $logDirectory) {
         Remove-Item $logDirectory -Recurse -Force
@@ -95,33 +96,6 @@ try {
         # UE must behave like an offline workstation. Keep the instance role available
         # to this runner so it can download source and upload results.
         $env:AWS_EC2_METADATA_DISABLED = "true"
-
-        Write-Host "Warming the Meerkat project derived data cache"
-        $warmupArguments = $commonArguments + @(
-            "-run=DerivedDataCache",
-            "-fill",
-            "-ProjectOnly"
-        )
-        $warmupProcess = Start-Process `
-            -FilePath $editor `
-            -ArgumentList $warmupArguments `
-            -RedirectStandardOutput $warmupStdoutPath `
-            -RedirectStandardError $warmupStderrPath `
-            -PassThru `
-            -Wait
-        Write-Host "Unreal DDC warmup exit code: $($warmupProcess.ExitCode)"
-
-        $warmupLog = Get-ChildItem $logDirectory -Filter "*.log" -File |
-            Sort-Object LastWriteTime -Descending |
-            Select-Object -First 1
-        if ($warmupLog) {
-            Copy-Item $warmupLog.FullName (Join-Path $resultRoot "UnrealEditor.warmup.log") -Force
-        }
-        if ($warmupProcess.ExitCode -ne 0) {
-            throw "Unreal DDC warmup failed with exit code $($warmupProcess.ExitCode)"
-        }
-
-        Remove-Item $logDirectory -Recurse -Force -ErrorAction SilentlyContinue
 
         $testPrefixes = @(
             "DeadlineCloud.SaveAsJobPreset",
