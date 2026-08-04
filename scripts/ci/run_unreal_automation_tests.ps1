@@ -85,10 +85,14 @@ try {
     $commonArguments = @(
         "`"$($project.FullName)`"",
         "-RenderOffScreen",
+        "-ForceRes",
+        "-ResX=1920",
+        "-ResY=1080",
         "-unattended",
         "-nosplash",
         "-NoSound",
         "-SCCProvider=None",
+        "`"-LogCmds=LogPython off`"",
         "-log"
     )
     $previousMetadataDisabled = $env:AWS_EC2_METADATA_DISABLED
