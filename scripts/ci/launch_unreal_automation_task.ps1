@@ -34,7 +34,7 @@ $task.Principal.LogonType = 3 # TASK_LOGON_INTERACTIVE_TOKEN
 $task.Principal.RunLevel = 1
 $task.Settings.Enabled = $true
 $task.Settings.StartWhenAvailable = $true
-$task.Settings.ExecutionTimeLimit = "PT110M"
+$task.Settings.ExecutionTimeLimit = "PT150M"
 $task.Settings.MultipleInstances = 0
 
 $action = $task.Actions.Create(0)
