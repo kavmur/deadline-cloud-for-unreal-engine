@@ -18,6 +18,8 @@ $runRoot = "C:\UnrealCI\runs\$RunId"
 $resultRoot = Join-Path $runRoot "results"
 $stdoutPath = Join-Path $resultRoot "UnrealEditor.stdout.log"
 $stderrPath = Join-Path $resultRoot "UnrealEditor.stderr.log"
+$warmupStdoutPath = Join-Path $resultRoot "UnrealEditor.warmup.stdout.log"
+$warmupStderrPath = Join-Path $resultRoot "UnrealEditor.warmup.stderr.log"
 $transcriptPath = Join-Path $resultRoot "runner.log"
 $resultPath = Join-Path $resultRoot "result.json"
 
@@ -79,43 +81,85 @@ try {
         Remove-Item $logDirectory -Recurse -Force
     }
 
-    $testPrefixes = @(
-        "DeadlineCloud.SaveAsJobPreset",
-        "DeadlineCloud.Validation",
-        "DeadlineCloud.UpdateDialog",
-        "DeadlineCloud.PluginDependencies",
-        "DeadlineCloud.FOpenDeadlineJob",
-        "DeadlineCloud.FOpenDeadlineStep",
-        "DeadlineCloud.FOpenDeadlineEnvironment",
-        "DeadlineCloud.FDeadlineHostRequirements",
-        "DeadlineCloud.DeadlineCloudMRQJobUI",
-        "DeadlineCloud.DeadlineCloudJobUI",
-        "DeadlineCloud.DeadlineCloudStepUI",
-        "DeadlineCloud.DeadlineCloudEnvironmentUI",
-        "DeadlineCloud.DeadlineCloudHostRequirementsUI",
-        "DeadlineCloud.DeadlineCloudSavePresetWidget"
-    )
-    $testSelection = $testPrefixes -join "+"
-    $arguments = @(
+    $commonArguments = @(
         "`"$($project.FullName)`"",
         "-RenderOffScreen",
         "-unattended",
         "-nosplash",
         "-NoSound",
         "-SCCProvider=None",
-        "`"-ExecCmds=Automation RunTests $testSelection`"",
-        "`"-testexit=Automation Test Queue Empty`"",
         "-log"
     )
+    $previousMetadataDisabled = $env:AWS_EC2_METADATA_DISABLED
+    try {
+        # UE must behave like an offline workstation. Keep the instance role available
+        # to this runner so it can download source and upload results.
+        $env:AWS_EC2_METADATA_DISABLED = "true"
 
-    $process = Start-Process `
-        -FilePath $editor `
-        -ArgumentList $arguments `
-        -RedirectStandardOutput $stdoutPath `
-        -RedirectStandardError $stderrPath `
-        -PassThru `
-        -Wait
-    Write-Host "UnrealEditor-Cmd exit code: $($process.ExitCode)"
+        Write-Host "Warming the Meerkat project derived data cache"
+        $warmupArguments = $commonArguments + @(
+            "-run=DerivedDataCache",
+            "-fill",
+            "-ProjectOnly"
+        )
+        $warmupProcess = Start-Process `
+            -FilePath $editor `
+            -ArgumentList $warmupArguments `
+            -RedirectStandardOutput $warmupStdoutPath `
+            -RedirectStandardError $warmupStderrPath `
+            -PassThru `
+            -Wait
+        Write-Host "Unreal DDC warmup exit code: $($warmupProcess.ExitCode)"
+
+        $warmupLog = Get-ChildItem $logDirectory -Filter "*.log" -File |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+        if ($warmupLog) {
+            Copy-Item $warmupLog.FullName (Join-Path $resultRoot "UnrealEditor.warmup.log") -Force
+        }
+        if ($warmupProcess.ExitCode -ne 0) {
+            throw "Unreal DDC warmup failed with exit code $($warmupProcess.ExitCode)"
+        }
+
+        Remove-Item $logDirectory -Recurse -Force -ErrorAction SilentlyContinue
+
+        $testPrefixes = @(
+            "DeadlineCloud.SaveAsJobPreset",
+            "DeadlineCloud.Validation",
+            "DeadlineCloud.UpdateDialog",
+            "DeadlineCloud.PluginDependencies",
+            "DeadlineCloud.FOpenDeadlineJob",
+            "DeadlineCloud.FOpenDeadlineStep",
+            "DeadlineCloud.FOpenDeadlineEnvironment",
+            "DeadlineCloud.FDeadlineHostRequirements",
+            "DeadlineCloud.DeadlineCloudMRQJobUI",
+            "DeadlineCloud.DeadlineCloudJobUI",
+            "DeadlineCloud.DeadlineCloudStepUI",
+            "DeadlineCloud.DeadlineCloudEnvironmentUI",
+            "DeadlineCloud.DeadlineCloudHostRequirementsUI",
+            "DeadlineCloud.DeadlineCloudSavePresetWidget"
+        )
+        $testSelection = $testPrefixes -join "+"
+        $arguments = $commonArguments + @(
+            "`"-ExecCmds=Automation RunTests $testSelection`"",
+            "`"-testexit=Automation Test Queue Empty`""
+        )
+
+        $process = Start-Process `
+            -FilePath $editor `
+            -ArgumentList $arguments `
+            -RedirectStandardOutput $stdoutPath `
+            -RedirectStandardError $stderrPath `
+            -PassThru `
+            -Wait
+        Write-Host "UnrealEditor-Cmd exit code: $($process.ExitCode)"
+    } finally {
+        if ($null -eq $previousMetadataDisabled) {
+            Remove-Item Env:\AWS_EC2_METADATA_DISABLED -ErrorAction SilentlyContinue
+        } else {
+            $env:AWS_EC2_METADATA_DISABLED = $previousMetadataDisabled
+        }
+    }
 
     $ueLog = Get-ChildItem $logDirectory -Filter "*.log" -File |
         Sort-Object LastWriteTime -Descending |
