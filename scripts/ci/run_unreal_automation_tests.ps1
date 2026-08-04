@@ -62,11 +62,19 @@ try {
     $cacheUri = "s3://$artifactBucket/$cacheObjectKey"
     Write-Host "Plugin cache key: $cacheKey"
 
-    & aws s3api head-object `
-        --bucket $artifactBucket `
-        --key $cacheObjectKey `
-        --no-cli-pager 2>$null | Out-Null
-    $cacheHit = $LASTEXITCODE -eq 0
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        # A cache miss is an expected non-zero native command. PowerShell 5.1
+        # otherwise promotes aws.exe's stderr record to a terminating error.
+        $ErrorActionPreference = "Continue"
+        & aws s3api head-object `
+            --bucket $artifactBucket `
+            --key $cacheObjectKey `
+            --no-cli-pager 2>$null | Out-Null
+        $cacheHit = $LASTEXITCODE -eq 0
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
     $pluginStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $buildStarted = (Get-Date).ToUniversalTime()
     Push-Location $SourceRoot
@@ -246,7 +254,7 @@ try {
     $status = "passed"
 } catch {
     $failureMessage = $_.Exception.Message
-    Write-Error $failureMessage
+    Write-Host "ERROR: $failureMessage"
 } finally {
     $runStopwatch.Stop()
     $timings.totalRunnerSeconds = [math]::Round($runStopwatch.Elapsed.TotalSeconds, 1)
