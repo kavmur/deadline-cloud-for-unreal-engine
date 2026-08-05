@@ -314,6 +314,7 @@ class TestUnrealAdaptor_on_start:
         assert unreal_client_path in launch_args[-1]
 
     @patch("time.strftime", return_value="deadline-cloud-insights-20260803-220000.utrace")
+    @patch("os.makedirs")
     @patch("os.path.exists", return_value=True)
     @patch(
         "deadline.unreal_adaptor.UnrealAdaptor.adaptor.UnrealAdaptor.unreal_client_path",
@@ -332,6 +333,7 @@ class TestUnrealAdaptor_on_start:
         mock_get_regex_callbacks: Mock,
         mock_unreal_client_path: Mock,
         mock_os_path_exists: Mock,
+        mock_os_makedirs: Mock,
         mock_strftime: Mock,
         init_data: dict,
     ):
@@ -357,7 +359,11 @@ class TestUnrealAdaptor_on_start:
             "-tracefile=C:/LocalProjects/AWS_RND/Saved/Profiling/DeadlineCloud/"
             "deadline-cloud-insights-20260803-220000.utrace"
         ) in launch_args
+        mock_os_makedirs.assert_called_once_with(
+            "C:/LocalProjects/AWS_RND/Saved/Profiling/DeadlineCloud", exist_ok=True
+        )
 
+    @patch("os.makedirs")
     @patch("os.path.exists", return_value=True)
     @patch(
         "deadline.unreal_adaptor.UnrealAdaptor.adaptor.UnrealAdaptor.unreal_client_path",
@@ -376,6 +382,7 @@ class TestUnrealAdaptor_on_start:
         mock_get_regex_callbacks: Mock,
         mock_unreal_client_path: Mock,
         mock_os_path_exists: Mock,
+        mock_os_makedirs: Mock,
         init_data: dict,
     ):
         unreal_client_path = "UnrealClient.py"
@@ -398,6 +405,7 @@ class TestUnrealAdaptor_on_start:
 
         assert "-tracefile=C:/Custom/Trace Output/trace.utrace" in launch_args
         assert len([arg for arg in launch_args if arg.startswith("-tracefile=")]) == 1
+        mock_os_makedirs.assert_not_called()
 
     @patch("os.path.exists", return_value=True)
     @patch(

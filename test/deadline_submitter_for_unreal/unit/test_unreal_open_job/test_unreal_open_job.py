@@ -799,10 +799,6 @@ class TestRenderUnrealOpenJob:
         "deadline.unreal_submitter.unreal_open_job.unreal_open_job.common.create_deadline_cloud_temp_file",
         return_value="/tmp/ExtraCmdArgsFile.txt",
     )
-    @patch(
-        "deadline.unreal_submitter.unreal_open_job.unreal_open_job.time.strftime",
-        return_value="deadline-cloud-insights-20260805-190000.utrace",
-    )
     @patch.object(
         UnrealOpenJob,
         "get_marketplace_plugins_dir",
@@ -811,7 +807,6 @@ class TestRenderUnrealOpenJob:
     def test__build_parameter_values_merges_profiling_cmd_args(
         self,
         get_marketplace_plugins_dir_mock,
-        strftime_mock,
         create_deadline_cloud_temp_file_mock,
         get_project_directory_mock,
         get_project_file_path_mock,
@@ -854,11 +849,7 @@ class TestRenderUnrealOpenJob:
         }[OpenJobParameterNames.MARKETPLACE_PLUGINS_DIR] == "/Engine/Plugins/Marketplace"
         assert set(switches) == {"stdout", "csvGpuStats"}
         assert params["trace"] == "gpu,cpu,frame,bookmark,loadtime,memory"
-        assert (
-            params["tracefile"]
-            == "/project dir/Saved/Profiling/DeadlineCloud/"
-            "deadline-cloud-insights-20260805-190000.utrace"
-        )
+        assert "tracefile" not in params
         assert params["csvCaptureFrames"] == "120"
         assert "ExecCmds" not in params
         assert "/tmp/ExtraCmdArgsFile.txt" in render_job._asset_references.input_filenames

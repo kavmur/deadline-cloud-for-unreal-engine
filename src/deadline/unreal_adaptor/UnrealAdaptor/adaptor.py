@@ -409,6 +409,7 @@ class UnrealAdaptor(Adaptor[AdaptorConfiguration]):
 
         project_dir = os.path.dirname(unreal_project_path).replace("\\", "/").rstrip("/")
         trace_dir = f"{project_dir}/Saved/Profiling/DeadlineCloud"
+        os.makedirs(trace_dir, exist_ok=True)
         trace_name = time.strftime("deadline-cloud-insights-%Y%m%d-%H%M%S.utrace")
         return f"-tracefile={trace_dir}/{trace_name}"
 
