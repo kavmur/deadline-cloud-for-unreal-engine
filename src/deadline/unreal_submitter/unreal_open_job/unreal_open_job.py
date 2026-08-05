@@ -4,6 +4,7 @@ import os
 import re
 import sys
 import json
+import time
 import unreal
 
 from enum import IntEnum
@@ -215,7 +216,19 @@ class ProfilingSettings:
     def is_enabled(self) -> bool:
         return self.is_insights_enabled() or self.csv_profiler
 
-    def build_cmd_args(self) -> str:
+    @staticmethod
+    def build_tracefile_arg(project_directory: Optional[str]) -> str:
+        if not project_directory:
+            return ""
+
+        profiling_root = project_directory.replace("\\", "/").rstrip("/")
+        trace_name = time.strftime("deadline-cloud-insights-%Y%m%d-%H%M%S.utrace")
+        trace_path = f"{profiling_root}/Saved/Profiling/DeadlineCloud/{trace_name}"
+        if any(char in trace_path for char in (" ", ",", ";")):
+            return f'-tracefile="{trace_path}"'
+        return f"-tracefile={trace_path}"
+
+    def build_cmd_args(self, project_directory: Optional[str] = None) -> str:
         trace_categories = OrderedDict()
         if self.insights_cpu:
             for category in ("cpu", "frame", "bookmark", "loadtime"):
@@ -228,6 +241,9 @@ class ProfilingSettings:
         cmd_args = []
         if trace_categories:
             cmd_args.append(f'-trace={",".join(trace_categories.values())}')
+            tracefile_arg = self.build_tracefile_arg(project_directory)
+            if tracefile_arg:
+                cmd_args.append(tracefile_arg)
         if self.csv_profiler:
             cmd_args.extend(
                 [
@@ -1543,7 +1559,7 @@ class RenderUnrealOpenJob(UnrealOpenJob):
         Returns profiler-specific command line arguments derived from the MRQ preset settings.
         """
 
-        return self.profiling_settings.build_cmd_args()
+        return self.profiling_settings.build_cmd_args(common.get_project_directory())
 
     def get_user_extra_cmd_args(self) -> str:
         """

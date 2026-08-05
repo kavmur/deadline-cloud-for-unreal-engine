@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import sys
 import time
 import logging
@@ -351,7 +352,11 @@ class UnrealAdaptor(Adaptor[AdaptorConfiguration]):
         if remote_execution == "True":
             log_args += ["-NoLoadingScreen", "-NoScreenMessages", "-RenderOffscreen", "-nozen"]
 
-        extra_cmd_args = extra_cmd_str.split(" ")
+        try:
+            extra_cmd_args = shlex.split(extra_cmd_str)
+        except ValueError:
+            logger.warning("Failed to parse extra command arguments with shlex; falling back to whitespace split")
+            extra_cmd_args = extra_cmd_str.split(" ")
 
         args = [unreal_exe, unreal_project_path]
         args.extend(log_args)

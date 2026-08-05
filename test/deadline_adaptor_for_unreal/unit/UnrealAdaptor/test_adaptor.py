@@ -382,7 +382,7 @@ class TestUnrealAdaptor_on_start:
         mock_unreal_client_path.side_effect = [unreal_client_path]
         init_data["extra_cmd_args_file"] = "path/to/args/file.txt"
         adaptor = UnrealAdaptor(init_data)
-        explicit_tracefile = "-tracefile=C:/Custom/trace.utrace"
+        explicit_tracefile = '-tracefile="C:/Custom/Trace Output/trace.utrace"'
 
         with patch(
             "builtins.open",
@@ -396,7 +396,7 @@ class TestUnrealAdaptor_on_start:
         )
         launch_args = ast.literal_eval(launch_ue_with_message)
 
-        assert explicit_tracefile in launch_args
+        assert "-tracefile=C:/Custom/Trace Output/trace.utrace" in launch_args
         assert len([arg for arg in launch_args if arg.startswith("-tracefile=")]) == 1
 
     @patch("os.path.exists", return_value=True)
