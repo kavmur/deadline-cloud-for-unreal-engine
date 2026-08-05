@@ -526,7 +526,7 @@ static FDriverElementPtr FindVisibleElementByPath(
 	List->ScrollToBeginning();
 	Driver->Wait(FTimespan::FromMilliseconds(100));
 
-	for (uint32 Attempt = 0; Attempt <= AttemptsLimit; ++Attempt)
+	auto FindCandidate = [&]() -> FDriverElementPtr
 	{
 		const TArray<FDriverElementRef> Candidates =
 			Driver->FindElements(By::Path(ElementPath))->GetElements();
@@ -538,15 +538,44 @@ static FDriverElementPtr FindVisibleElementByPath(
 				return Candidate;
 			}
 		}
+		return FDriverElementPtr();
+	};
 
-		if (ScrollBar->IsScrolledToEnd())
+	auto Scan = [&](float ScrollAmount, TFunctionRef<bool()> ReachedBoundary) -> FDriverElementPtr
+	{
+		for (uint32 Attempt = 0; Attempt <= AttemptsLimit; ++Attempt)
 		{
-			Driver->Wait(FTimespan::FromMilliseconds(200));
-			break;
-		}
+			if (FDriverElementPtr Candidate = FindCandidate())
+			{
+				return Candidate;
+			}
 
-		List->ScrollBy(-1);
-		Driver->Wait(FTimespan::FromMilliseconds(50));
+			if (ReachedBoundary())
+			{
+				Driver->Wait(FTimespan::FromMilliseconds(200));
+				return FindCandidate();
+			}
+
+			List->ScrollBy(ScrollAmount);
+			Driver->Wait(FTimespan::FromMilliseconds(50));
+		}
+		return FDriverElementPtr();
+	};
+
+	if (FDriverElementPtr Candidate =
+		Scan(-1, [&ScrollBar]() { return ScrollBar->IsScrolledToEnd(); }))
+	{
+		return Candidate;
+	}
+
+	// A full wheel increment can step over a short row. Sweep back from the
+	// bottom at half-step offsets so narrow targets cannot remain between samples.
+	List->ScrollBy(0.5f);
+	Driver->Wait(FTimespan::FromMilliseconds(50));
+	if (FDriverElementPtr Candidate =
+		Scan(1, [&ScrollBar]() { return ScrollBar->IsScrolledToBeginning(); }))
+	{
+		return Candidate;
 	}
 
 	return nullptr;
