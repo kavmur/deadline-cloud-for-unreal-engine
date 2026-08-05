@@ -170,6 +170,7 @@ try {
         "-ForceRes",
         "-ResX=3840",
         "-ResY=2160",
+        "-Maximized",
         "-unattended",
         "-nosplash",
         "-NoSound",
