@@ -541,22 +541,41 @@ static FDriverElementPtr FindVisibleElementByPath(
 		return FDriverElementPtr();
 	};
 
-	// Half-step increments keep short rows from falling between scroll samples.
-	for (uint32 Attempt = 0; Attempt <= AttemptsLimit * 2; ++Attempt)
+	auto Scan = [&](float ScrollAmount, TFunctionRef<bool()> ReachedBoundary) -> FDriverElementPtr
 	{
-		if (FDriverElementPtr Candidate = FindCandidate())
+		for (uint32 Attempt = 0; Attempt <= AttemptsLimit; ++Attempt)
 		{
-			return Candidate;
-		}
+			if (FDriverElementPtr Candidate = FindCandidate())
+			{
+				return Candidate;
+			}
 
-		if (ScrollBar->IsScrolledToEnd())
-		{
-			FPlatformProcess::Sleep(0.2f);
-			return FindCandidate();
-		}
+			if (ReachedBoundary())
+			{
+				FPlatformProcess::Sleep(0.2f);
+				return FindCandidate();
+			}
 
-		List->ScrollBy(-0.5f);
-		FPlatformProcess::Sleep(0.05f);
+			List->ScrollBy(ScrollAmount);
+			FPlatformProcess::Sleep(0.05f);
+		}
+		return FDriverElementPtr();
+	};
+
+	if (FDriverElementPtr Candidate =
+		Scan(-1, [&ScrollBar]() { return ScrollBar->IsScrolledToEnd(); }))
+	{
+		return Candidate;
+	}
+
+	// The virtualized details list can omit short rows during downward traversal.
+	// Sweep back from the bottom at half-step offsets to materialize those rows.
+	List->ScrollBy(0.5f);
+	FPlatformProcess::Sleep(0.05f);
+	if (FDriverElementPtr Candidate =
+		Scan(1, [&ScrollBar]() { return ScrollBar->IsScrolledToBeginning(); }))
+	{
+		return Candidate;
 	}
 
 	return nullptr;
