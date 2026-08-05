@@ -510,6 +510,48 @@ static void ScrollToElement(FAutomationDriverPtr Driver, FDriverElementRef List,
 	}
 }
 
+static FDriverElementPtr FindVisibleElementByPath(
+	FAutomationDriverPtr Driver,
+	FDriverElementRef List,
+	FDriverElementRef ScrollBar,
+	const FString& ElementPath,
+	uint32 AttemptsLimit,
+	bool bRequireInteractable = false)
+{
+	if (!List->Exists() || !ScrollBar->Exists())
+	{
+		return nullptr;
+	}
+
+	List->ScrollToBeginning();
+	Driver->Wait(FTimespan::FromMilliseconds(100));
+
+	for (uint32 Attempt = 0; Attempt <= AttemptsLimit; ++Attempt)
+	{
+		const TArray<FDriverElementRef> Candidates =
+			Driver->FindElements(By::Path(ElementPath))->GetElements();
+		for (const FDriverElementRef& Candidate : Candidates)
+		{
+			if (Candidate->Exists() && Candidate->IsVisible() &&
+				(!bRequireInteractable || Candidate->IsInteractable()))
+			{
+				return Candidate;
+			}
+		}
+
+		if (ScrollBar->IsScrolledToEnd())
+		{
+			Driver->Wait(FTimespan::FromMilliseconds(200));
+			break;
+		}
+
+		List->ScrollBy(-1);
+		Driver->Wait(FTimespan::FromMilliseconds(50));
+	}
+
+	return nullptr;
+}
+
 template<typename AssetType>
 AssetType* CreateAsset(
 	const FString& RelativeTemplatePath,
@@ -881,37 +923,13 @@ void FDeadlinePluginUISpec::Define()
 			}
 
 			ExpandAllProperties(MRQDetailsPath, Driver);
+			Driver->Wait(FTimespan::FromMilliseconds(500));
 
-			FDriverElementRef StringParametersWidget = Driver->FindElement(By::Path(StringParametersPath));
-			FDriverElementRef PathParametersWidget = Driver->FindElement(By::Path(PathParametersPath));
-			FDriverElementRef FloatParametersWidget = Driver->FindElement(By::Path(FloatParametersPath));
-			FDriverElementRef IntParametersWidget = Driver->FindElement(By::Path(IntParametersPath));
-			FDriverElementRef HiddenParametersWidget = Driver->FindElement(By::Path(HiddenParametersPath));
-
-			FDriverElementRef StepStringParametersWidget = Driver->FindElement(By::Path(StepStringParametersPath));
-			FDriverElementRef StepPathParametersWidget = Driver->FindElement(By::Path(StepPathParametersPath));
-			FDriverElementRef StepFloatParametersWidget = Driver->FindElement(By::Path(StepFloatParametersPath));
-			FDriverElementRef StepIntParametersWidget = Driver->FindElement(By::Path(StepIntParametersPath));
-			FDriverElementRef StepHiddenParametersWidget = Driver->FindElement(By::Path(StepHiddenParametersPath));
-
-			FDriverElementRef Variable1Widget = Driver->FindElement(By::Path(Variable1Path));
-			FDriverElementRef Variable2Widget = Driver->FindElement(By::Path(Variable2Path));
-			FDriverElementRef Variable3Widget = Driver->FindElement(By::Path(Variable3Path));
-			FDriverElementRef HiddenVariableWidget = Driver->FindElement(By::Path(HiddenVariablePath));
-
-			FDriverElementRef DefaultStepCategory = Driver->FindElement(By::Path("#MRQStepHeader.Render"));
-			FDriverElementRef EmptyStepCategory = Driver->FindElement(By::Path("#MRQStepHeader.Empty"));
-			FDriverElementRef DefaultEnvCategory = Driver->FindElement(By::Path("#MRQEnvHeader.LaunchUnrealEditor"));
-			FDriverElementRef EmptyStepEnvCategory = Driver->FindElement(By::Path("#MRQStepEnvHeader.Empty"));
-
-			FDriverElementRef SavePresetButton = Driver->FindElement(By::Path("#MRQJobSavePresetButton"));
-			FDriverElementRef FileArrayElementText = Driver->FindElement(By::Path("#AttachmentArrayElement.Value//<SFilePathPicker>//<SEditableTextBox>"));
-			FDriverElementRef DirArrayElementText = Driver->FindElement(By::Path("#AttachmentArrayElement.Value//<SPropertyEditorText>//<SEditableTextBox>"));
-
-			auto VisibilityTest = [this](const FString& ParameterName, FDriverElementRef Widget, bool bShouldBeVisible)
+			auto VisibilityTest = [this](const FString& ParameterName, const FString& WidgetPath, bool bShouldBeVisible)
 				{
-					ScrollToElement(Driver, List.ToSharedRef(), ScrollBar.ToSharedRef(), Widget, 50);
-					bool bIsVisible = Widget->IsVisible();
+					const FDriverElementPtr Widget = FindVisibleElementByPath(
+						Driver, List.ToSharedRef(), ScrollBar.ToSharedRef(), WidgetPath, 50);
+					const bool bIsVisible = Widget.IsValid();
 					if (bShouldBeVisible)
 					{
 						TestTrue(ParameterName + " widget should be visible", bIsVisible);
@@ -922,12 +940,13 @@ void FDeadlinePluginUISpec::Define()
 					}
 				};
 
-			auto EditableTextTest = [this](const FString& ParameterName, FDriverElementRef Widget, const FString& ExpectedValue)
+			auto EditableTextTest = [this](const FString& ParameterName, const FString& WidgetPath, const FString& ExpectedValue)
 				{
-					ScrollToElement(Driver, List.ToSharedRef(), ScrollBar.ToSharedRef(), Widget, 50);
-					if (Widget->IsVisible() && Widget->IsInteractable())
+					const FDriverElementPtr Widget = FindVisibleElementByPath(
+						Driver, List.ToSharedRef(), ScrollBar.ToSharedRef(), WidgetPath, 50, true);
+					if (Widget.IsValid())
 					{
-						InputText(Widget, "Test", true);
+						InputText(Widget.ToSharedRef(), "Test", true);
 						TestTrue(ParameterName + " should be editable", "Test" == ExpectedValue);
 					}
 					else
@@ -936,33 +955,33 @@ void FDeadlinePluginUISpec::Define()
 					}
 				};
 
-			VisibilityTest("SavePresetButton", SavePresetButton, true);
+			VisibilityTest("SavePresetButton", "#MRQJobSavePresetButton", true);
 
-			EditableTextTest("File Array Element Text", FileArrayElementText, MRQJob->PresetOverrides.JobAttachments.InputFiles.Files.Paths[0].FilePath);
-			EditableTextTest("Dir Array Element Text", DirArrayElementText, MRQJob->PresetOverrides.JobAttachments.InputDirectories.Directories.Paths[0].Path);
+			EditableTextTest("File Array Element Text", "#AttachmentArrayElement.Value//<SFilePathPicker>//<SEditableTextBox>", MRQJob->PresetOverrides.JobAttachments.InputFiles.Files.Paths[0].FilePath);
+			EditableTextTest("Dir Array Element Text", "#AttachmentArrayElement.Value//<SPropertyEditorText>//<SEditableTextBox>", MRQJob->PresetOverrides.JobAttachments.InputDirectories.Directories.Paths[0].Path);
 
-			VisibilityTest("StringParameters", StringParametersWidget, true);
-			VisibilityTest("PathParameters", PathParametersWidget, true);
-			VisibilityTest("FloatParameters", FloatParametersWidget, true);
-			VisibilityTest("IntParameters", IntParametersWidget, true);
-			VisibilityTest("HiddenParameters", HiddenParametersWidget, false);
+			VisibilityTest("StringParameters", StringParametersPath, true);
+			VisibilityTest("PathParameters", PathParametersPath, true);
+			VisibilityTest("FloatParameters", FloatParametersPath, true);
+			VisibilityTest("IntParameters", IntParametersPath, true);
+			VisibilityTest("HiddenParameters", HiddenParametersPath, false);
 
-			VisibilityTest("StepStringParameters", StepStringParametersWidget, true);
-			VisibilityTest("StepPathParameters", StepPathParametersWidget, true);
-			VisibilityTest("StepFloatParameters", StepFloatParametersWidget, true);
-			VisibilityTest("StepIntParameters", StepIntParametersWidget, true);
-			VisibilityTest("StepHiddenParameters", StepHiddenParametersWidget, false);
+			VisibilityTest("StepStringParameters", StepStringParametersPath, true);
+			VisibilityTest("StepPathParameters", StepPathParametersPath, true);
+			VisibilityTest("StepFloatParameters", StepFloatParametersPath, true);
+			VisibilityTest("StepIntParameters", StepIntParametersPath, true);
+			VisibilityTest("StepHiddenParameters", StepHiddenParametersPath, false);
 
-			VisibilityTest("Variable1", Variable1Widget, true);
-			VisibilityTest("Variable2", Variable2Widget, true);
-			VisibilityTest("Variable3", Variable3Widget, true);
-			VisibilityTest("HiddenVariable", HiddenVariableWidget, false);
+			VisibilityTest("Variable1", Variable1Path, true);
+			VisibilityTest("Variable2", Variable2Path, true);
+			VisibilityTest("Variable3", Variable3Path, true);
+			VisibilityTest("HiddenVariable", HiddenVariablePath, false);
 			
 			// always visible with host reqs
-			//VisibilityTest("Default Step category", DefaultStepCategory, true);
-			//VisibilityTest("Empty Step category", EmptyStepCategory, false);
-			VisibilityTest("Default Environment category", DefaultEnvCategory, true);
-			VisibilityTest("Empty Step Environment category", EmptyStepEnvCategory, false);
+			//VisibilityTest("Default Step category", "#MRQStepHeader.Render", true);
+			//VisibilityTest("Empty Step category", "#MRQStepHeader.Empty", false);
+			VisibilityTest("Default Environment category", "#MRQEnvHeader.LaunchUnrealEditor", true);
+			VisibilityTest("Empty Step Environment category", "#MRQStepEnvHeader.Empty", false);
 
 			});
 
@@ -1593,4 +1612,3 @@ void FDeadlinePluginUISpec::Define()
 		IAutomationDriverModule::Get().Disable();
 		});
 }
-
