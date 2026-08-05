@@ -342,6 +342,7 @@ class UnrealAdaptor(Adaptor[AdaptorConfiguration]):
 
         # Remove the -execcmds argument from the extra_cmd_args
         extra_cmd_str = re.sub(r'(-execcmds=["\'][^"\']*["\'])', "", extra_cmd_str)
+        trace_file_arg = self._get_tracefile_arg(unreal_project_path, extra_cmd_str)
 
         client_path = self.unreal_client_path.replace("\\", "/")
         log_args = ["-log", "-unattended", "-stdout", "-allowstdoutlogverbosity", "-nozen"]
@@ -355,6 +356,8 @@ class UnrealAdaptor(Adaptor[AdaptorConfiguration]):
         args = [unreal_exe, unreal_project_path]
         args.extend(log_args)
         args.extend(extra_cmd_args)
+        if trace_file_arg:
+            args.append(trace_file_arg)
         args = [arg for arg in args if arg]  # Remove empty strings
         args = list(dict.fromkeys(args))  # Remove duplicates
 
@@ -382,6 +385,27 @@ class UnrealAdaptor(Adaptor[AdaptorConfiguration]):
             stdout_handler=regexhandler,
             stderr_handler=regexhandler,
         )
+
+    @staticmethod
+    def _get_tracefile_arg(unreal_project_path: str, extra_cmd_str: str) -> str | None:
+        """
+        If tracing is enabled without an explicit tracefile, write traces under the
+        runtime project's Saved/Profiling directory so artifacts are produced on the worker.
+        """
+
+        if not unreal_project_path:
+            return None
+
+        if not re.search(r"(^|\s)-trace=", extra_cmd_str, flags=re.IGNORECASE):
+            return None
+
+        if re.search(r"(^|\s)-tracefile=", extra_cmd_str, flags=re.IGNORECASE):
+            return None
+
+        project_dir = os.path.dirname(unreal_project_path).replace("\\", "/").rstrip("/")
+        trace_dir = f"{project_dir}/Saved/Profiling/DeadlineCloud"
+        trace_name = time.strftime("deadline-cloud-insights-%Y%m%d-%H%M%S.utrace")
+        return f"-tracefile={trace_dir}/{trace_name}"
 
     def _populate_client_loaded_action(self) -> None:
         """
