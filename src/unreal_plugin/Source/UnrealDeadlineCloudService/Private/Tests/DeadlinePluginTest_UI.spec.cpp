@@ -492,7 +492,7 @@ static void ScrollToElement(FAutomationDriverPtr Driver, FDriverElementRef List,
 
 	// Start from the top so the target is reachable regardless of the prior scroll offset.
 	List->ScrollToBeginning();
-	Driver->Wait(FTimespan::FromMilliseconds(100));
+	FPlatformProcess::Sleep(0.1f);
 
 	uint32 CurrentAttempts = 0;
 	while ((!TargetElement->Exists() || !TargetElement->IsVisible()) && CurrentAttempts < AttemptsLimit)
@@ -500,12 +500,12 @@ static void ScrollToElement(FAutomationDriverPtr Driver, FDriverElementRef List,
 		if (ScrollBar->IsScrolledToEnd())
 		{
 			// Let tall, still-laying-out rows settle and re-check before giving up at the bottom.
-			Driver->Wait(FTimespan::FromMilliseconds(150));
+			FPlatformProcess::Sleep(0.15f);
 			return;
 		}
 
 		List->ScrollBy(-1);
-		Driver->Wait(FTimespan::FromMilliseconds(50));
+		FPlatformProcess::Sleep(0.05f);
 		CurrentAttempts++;
 	}
 }
