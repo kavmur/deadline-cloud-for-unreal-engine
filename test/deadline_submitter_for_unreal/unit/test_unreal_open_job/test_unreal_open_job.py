@@ -789,11 +789,19 @@ class TestRenderUnrealOpenJob:
     )
     @patch(
         "deadline.unreal_submitter.unreal_open_job.unreal_open_job.common.get_project_file_path",
-        return_value="/project/MyProject.uproject",
+        return_value="/project dir/MyProject.uproject",
+    )
+    @patch(
+        "deadline.unreal_submitter.unreal_open_job.unreal_open_job.common.get_project_directory",
+        return_value="/project dir",
     )
     @patch(
         "deadline.unreal_submitter.unreal_open_job.unreal_open_job.common.create_deadline_cloud_temp_file",
         return_value="/tmp/ExtraCmdArgsFile.txt",
+    )
+    @patch(
+        "deadline.unreal_submitter.unreal_open_job.unreal_open_job.time.strftime",
+        return_value="deadline-cloud-insights-20260805-190000.utrace",
     )
     @patch.object(
         UnrealOpenJob,
@@ -803,7 +811,9 @@ class TestRenderUnrealOpenJob:
     def test__build_parameter_values_merges_profiling_cmd_args(
         self,
         get_marketplace_plugins_dir_mock,
+        strftime_mock,
         create_deadline_cloud_temp_file_mock,
+        get_project_directory_mock,
         get_project_file_path_mock,
         get_in_process_executor_cmd_args_mock,
         get_template_object_mock,
@@ -838,12 +848,17 @@ class TestRenderUnrealOpenJob:
         }[OpenJobParameterNames.UNREAL_EXTRA_CMD_ARGS_FILE] == "/tmp/ExtraCmdArgsFile.txt"
         assert {
             p["name"]: p["value"] for p in parameter_values
-        }[OpenJobParameterNames.UNREAL_PROJECT_PATH] == "/project/MyProject.uproject"
+        }[OpenJobParameterNames.UNREAL_PROJECT_PATH] == "/project dir/MyProject.uproject"
         assert {
             p["name"]: p["value"] for p in parameter_values
         }[OpenJobParameterNames.MARKETPLACE_PLUGINS_DIR] == "/Engine/Plugins/Marketplace"
         assert set(switches) == {"stdout", "csvGpuStats"}
         assert params["trace"] == "gpu,cpu,frame,bookmark,loadtime,memory"
+        assert (
+            params["tracefile"]
+            == "/project dir/Saved/Profiling/DeadlineCloud/"
+            "deadline-cloud-insights-20260805-190000.utrace"
+        )
         assert params["csvCaptureFrames"] == "120"
         assert "ExecCmds" not in params
         assert "/tmp/ExtraCmdArgsFile.txt" in render_job._asset_references.input_filenames
