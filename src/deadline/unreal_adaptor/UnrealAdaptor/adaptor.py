@@ -68,6 +68,7 @@ class UnrealAdaptor(Adaptor[AdaptorConfiguration]):
         super().__init__(*args, **kwargs)
 
         self.data_validation = DataValidation()
+        self._csv_capture_frames: int | None = None
 
     @property
     def integration_data_interface_version(self) -> SemanticVersion:
@@ -343,8 +344,6 @@ class UnrealAdaptor(Adaptor[AdaptorConfiguration]):
 
         # Remove the -execcmds argument from the extra_cmd_args
         extra_cmd_str = re.sub(r'(-execcmds=["\'][^"\']*["\'])', "", extra_cmd_str)
-        trace_file_arg = self._get_tracefile_arg(unreal_project_path, extra_cmd_str)
-
         client_path = self.unreal_client_path.replace("\\", "/")
         log_args = ["-log", "-unattended", "-stdout", "-allowstdoutlogverbosity", "-nozen"]
 
@@ -355,8 +354,16 @@ class UnrealAdaptor(Adaptor[AdaptorConfiguration]):
         try:
             extra_cmd_args = shlex.split(extra_cmd_str)
         except ValueError:
-            logger.warning("Failed to parse extra command arguments with shlex; falling back to whitespace split")
+            logger.warning(
+                "Failed to parse extra command arguments with shlex; "
+                "falling back to whitespace split"
+            )
             extra_cmd_args = extra_cmd_str.split(" ")
+
+        extra_cmd_args, self._csv_capture_frames = self._extract_csv_capture_frames_arg(
+            extra_cmd_args
+        )
+        trace_file_arg = self._get_tracefile_arg(unreal_project_path, " ".join(extra_cmd_args))
 
         args = [unreal_exe, unreal_project_path]
         args.extend(log_args)
@@ -390,6 +397,50 @@ class UnrealAdaptor(Adaptor[AdaptorConfiguration]):
             stdout_handler=regexhandler,
             stderr_handler=regexhandler,
         )
+
+    @staticmethod
+    def _extract_csv_capture_frames_arg(
+        extra_cmd_args: list[str],
+    ) -> tuple[list[str], int | None]:
+        """
+        Remove launch-time CSV frame capture so render steps can start CSV only
+        after MRQ reports that rendering has actually begun.
+        """
+
+        filtered_args: list[str] = []
+        csv_capture_frames: int | None = None
+        index = 0
+
+        while index < len(extra_cmd_args):
+            token = extra_cmd_args[index]
+            match = re.match(r"^-csvCaptureFrames(?:=(.+))?$", token, flags=re.IGNORECASE)
+            if not match:
+                filtered_args.append(token)
+                index += 1
+                continue
+
+            raw_value = match.group(1)
+            if raw_value is None:
+                index += 1
+                raw_value = extra_cmd_args[index] if index < len(extra_cmd_args) else None
+
+            if raw_value is None or str(raw_value).startswith("-"):
+                logger.warning("Ignoring -csvCaptureFrames without a numeric value")
+                index += 1
+                continue
+
+            try:
+                csv_capture_frames = max(1, int(str(raw_value).strip()))
+                logger.info(
+                    "Deferring CSV capture until render begins: %s frame(s)",
+                    csv_capture_frames,
+                )
+            except ValueError:
+                logger.warning("Ignoring invalid -csvCaptureFrames value: %s", raw_value)
+
+            index += 1
+
+        return filtered_args, csv_capture_frames
 
     @staticmethod
     def _get_tracefile_arg(unreal_project_path: str, extra_cmd_str: str) -> str | None:
@@ -511,6 +562,10 @@ class UnrealAdaptor(Adaptor[AdaptorConfiguration]):
             self.data_validation.validate_run_data(run_data)
         except (jsonschema.exceptions.ValidationError, jsonschema.exceptions.SchemaError) as e:
             self._record_error_and_raise(exc=e, exception_scope="on_run")
+
+        if self._csv_capture_frames and run_data.get("handler", "base") == "render":
+            run_data = dict(run_data)
+            run_data["csv_capture_frames"] = self._csv_capture_frames
 
         # Set up the step handler
         self._action_queue.enqueue_action(

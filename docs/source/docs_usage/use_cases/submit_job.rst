@@ -31,4 +31,10 @@ To submit DeadlineCloud Job from Movie Render Queue, follow next steps:
       .. image:: ../../images/submit_job_5.png
 
 #. Update parameters in Preset Overrides if needed
+
+   a. Use **Profiling Settings** to enable Unreal Insights CPU, GPU, or Memory tracing.
+   #. Enable **CSV Profiler** to capture CSV output and adjust **CSV Capture Frames** if needed.
+   #. The submitter automatically adds the required Unreal launch arguments and profiling output directories for these options.
+   #. Remote profiling artifacts are uploaded with the job outputs through Job Attachments. Unreal Insights traces are written under ``Saved/Profiling`` and CSV output under ``Saved/Profiling/CSV`` on the worker.
+
 #. Click “Render (Remote)” button

@@ -49,6 +49,14 @@ def run_data() -> dict:
 
 
 class TestUnrealAdaptor_on_start:
+    def test_extract_csv_capture_frames_arg(self):
+        filtered_args, csv_capture_frames = UnrealAdaptor._extract_csv_capture_frames_arg(
+            ["-csvGpuStats", "-csvCaptureFrames=120", "-trace=cpu,frame"]
+        )
+
+        assert filtered_args == ["-csvGpuStats", "-trace=cpu,frame"]
+        assert csv_capture_frames == 120
+
     @patch(
         "deadline.unreal_adaptor.UnrealAdaptor.adaptor.UnrealAdaptor.telemetry_client",
         new_callable=PropertyMock,
@@ -313,6 +321,48 @@ class TestUnrealAdaptor_on_start:
         assert extra_cmd_arg in launch_args
         assert unreal_client_path in launch_args[-1]
 
+    @patch("os.path.exists", return_value=True)
+    @patch(
+        "deadline.unreal_adaptor.UnrealAdaptor.adaptor.UnrealAdaptor.unreal_client_path",
+        new_callable=PropertyMock,
+    )
+    @patch(
+        "deadline.unreal_adaptor.UnrealAdaptor.adaptor.UnrealAdaptor._get_regex_callbacks",
+        return_value=[],
+    )
+    @patch("deadline.unreal_adaptor.UnrealAdaptor.adaptor.logger")
+    @patch("deadline.unreal_adaptor.UnrealAdaptor.adaptor.UnrealSubprocessWithLogs")
+    def test__start_unreal_client_defers_csv_capture_frames(
+        self,
+        mock_subprocess: Mock,
+        mock_logger: Mock,
+        mock_get_regex_callbacks: Mock,
+        mock_unreal_client_path: Mock,
+        os_path_exists: Mock,
+        init_data: dict,
+    ):
+        init_data["extra_cmd_args_file"] = "path/to/args/file.txt"
+
+        unreal_client_path = "UnrealClient.py"
+        mock_unreal_client_path.side_effect = [unreal_client_path]
+        adaptor = UnrealAdaptor(init_data)
+
+        with patch(
+            "builtins.open",
+            new_callable=mock_open,
+            read_data="-csvGpuStats -csvCaptureFrames=120",
+        ):
+            adaptor._start_unreal_client()
+
+        launch_ue_with_message = (
+            mock_logger.mock_calls[-1].args[0].replace("Starting Unreal Engine with args: ", "")
+        )
+        launch_args = ast.literal_eval(launch_ue_with_message)
+
+        assert "-csvGpuStats" in launch_args
+        assert not any(arg.startswith("-csvCaptureFrames") for arg in launch_args)
+        assert adaptor._csv_capture_frames == 120
+
     @patch("time.strftime", return_value="deadline-cloud-insights-20260803-220000.utrace")
     @patch("os.makedirs")
     @patch("os.path.exists", return_value=True)
@@ -509,6 +559,48 @@ class TestUnrealAdaptor_on_run:
 
         # THEN
         mock_sleep.assert_called_once_with(1)
+
+    @patch.object(UnrealAdaptor, "_maybe_submit_renders_to_perforce")
+    @patch.object(UnrealAdaptor, "_snapshot_output_files", return_value={})
+    @patch("time.sleep")
+    @patch(
+        "deadline.unreal_adaptor.UnrealAdaptor.adaptor.UnrealAdaptor.telemetry_client",
+        new_callable=PropertyMock,
+    )
+    @patch("deadline.unreal_adaptor.UnrealAdaptor.adaptor.ActionsQueue.enqueue_action")
+    @patch("deadline.unreal_adaptor.UnrealAdaptor.adaptor.ActionsQueue.__len__", return_value=0)
+    @patch("deadline.unreal_adaptor.UnrealAdaptor.adaptor.UnrealSubprocessWithLogs")
+    @patch("deadline.unreal_adaptor.UnrealAdaptor.adaptor.AdaptorServer")
+    def test_on_run_injects_deferred_csv_capture_frames(
+        self,
+        mock_server: Mock,
+        mock_logging_subprocess: Mock,
+        mock_actions_queue_len: Mock,
+        mock_enqueue_action: Mock,
+        mock_telemetry_client: Mock,
+        mock_sleep: Mock,
+        mock_snapshot_output_files: Mock,
+        mock_submit_renders_to_perforce: Mock,
+        init_data: dict,
+        run_data: dict,
+    ) -> None:
+        adaptor = UnrealAdaptor(init_data)
+        mock_server.return_value.server_path = "/tmp/9999"
+        is_rendering_mock = PropertyMock(side_effect=[None, True, False])
+        UnrealAdaptor._is_rendering = is_rendering_mock
+        adaptor.on_start()
+        adaptor._csv_capture_frames = 120
+
+        adaptor.on_run(run_data)
+
+        run_script_action = next(
+            call.args[0]
+            for call in mock_enqueue_action.call_args_list
+            if call.args and getattr(call.args[0], "name", None) == "run_script"
+        )
+
+        assert run_script_action.args["csv_capture_frames"] == 120
+        assert "csv_capture_frames" not in run_data
 
     @patch("time.sleep")
     @patch(

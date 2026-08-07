@@ -229,12 +229,7 @@ class ProfilingSettings:
         if trace_categories:
             cmd_args.append(f'-trace={",".join(trace_categories.values())}')
         if self.csv_profiler:
-            cmd_args.extend(
-                [
-                    "-csvGpuStats",
-                    f"-csvCaptureFrames={max(1, self.csv_capture_frames)}",
-                ]
-            )
+            cmd_args.append("-csvGpuStats")
 
         return " ".join(cmd_args)
 

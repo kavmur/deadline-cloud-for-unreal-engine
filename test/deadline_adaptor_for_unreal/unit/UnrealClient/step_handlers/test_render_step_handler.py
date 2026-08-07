@@ -147,3 +147,60 @@ class TestApplyParamAliases:
     def test_returns_same_dict(self, unreal_render_step_handler):
         args = {"handler": "render", "chunk_size": 1}
         assert unreal_render_step_handler._apply_param_aliases(args) is args
+
+
+class TestCsvCaptureHelpers:
+    @pytest.mark.parametrize(
+        "args, expected",
+        [
+            ({}, 0),
+            ({"csv_capture_frames": 120}, 120),
+            ({"csv_capture_frames": "42"}, 42),
+            ({"csv_capture_frames": 0}, 0),
+            ({"csv_capture_frames": -5}, 0),
+        ],
+    )
+    def test_get_csv_capture_frames(self, unreal_render_step_handler, args, expected):
+        assert unreal_render_step_handler._get_csv_capture_frames(args) == expected
+
+    def test_stop_executor_csv_capture_calls_hook(self, unreal_render_step_handler):
+        executor = MagicMock()
+
+        unreal_render_step_handler._stop_executor_csv_capture(executor, "render completed")
+
+        executor._stop_csv_capture.assert_called_once_with("render completed")
+
+
+class TestConsoleCommandWorld:
+    @staticmethod
+    def _module():
+        from deadline.unreal_adaptor.UnrealClient.step_handlers import unreal_render_step_handler
+
+        unreal_render_step_handler.unreal = unreal_mock
+        unreal_mock.reset_mock()
+        return unreal_render_step_handler
+
+    def test_prefers_pie_world(self):
+        unreal_render_step_handler = self._module()
+        pie_world = object()
+        unreal_render_step_handler.unreal.EditorLevelLibrary.get_pie_worlds.return_value = [pie_world]
+
+        assert unreal_render_step_handler._get_command_world() is pie_world
+
+    def test_falls_back_to_game_world(self):
+        unreal_render_step_handler = self._module()
+        game_world = object()
+        unreal_render_step_handler.unreal.EditorLevelLibrary.get_pie_worlds.return_value = []
+        unreal_render_step_handler.unreal.EditorLevelLibrary.get_game_world.return_value = game_world
+
+        assert unreal_render_step_handler._get_command_world() is game_world
+
+    def test_falls_back_to_editor_world(self):
+        unreal_render_step_handler = self._module()
+        editor_world = object()
+        unreal_render_step_handler.unreal.EditorLevelLibrary.get_pie_worlds.return_value = []
+        unreal_render_step_handler.unreal.EditorLevelLibrary.get_game_world.return_value = None
+        unreal_render_step_handler.unreal.get_editor_subsystem.return_value = None
+        unreal_render_step_handler.unreal.EditorLevelLibrary.get_editor_world.return_value = editor_world
+
+        assert unreal_render_step_handler._get_command_world() is editor_world

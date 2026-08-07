@@ -21,12 +21,88 @@ from deadline.unreal_logger import get_logger
 logger = get_logger()
 
 
+def _get_command_world():
+    """Resolve the best available world for console commands during MRQ/PIE."""
+
+    if unreal is None:
+        return None
+
+    editor_level_library = getattr(unreal, "EditorLevelLibrary", None)
+    if editor_level_library is not None:
+        get_pie_worlds = getattr(editor_level_library, "get_pie_worlds", None)
+        if callable(get_pie_worlds):
+            try:
+                pie_worlds = get_pie_worlds(False)
+            except TypeError:
+                pie_worlds = get_pie_worlds()
+            if pie_worlds:
+                return pie_worlds[0]
+
+        get_game_world = getattr(editor_level_library, "get_game_world", None)
+        if callable(get_game_world):
+            game_world = get_game_world()
+            if game_world is not None:
+                return game_world
+
+    unreal_editor_subsystem_cls = getattr(unreal, "UnrealEditorSubsystem", None)
+    get_editor_subsystem = getattr(unreal, "get_editor_subsystem", None)
+    if unreal_editor_subsystem_cls is not None and callable(get_editor_subsystem):
+        subsystem = get_editor_subsystem(unreal_editor_subsystem_cls)
+        if subsystem is not None:
+            get_game_world = getattr(subsystem, "get_game_world", None)
+            if callable(get_game_world):
+                game_world = get_game_world()
+                if game_world is not None:
+                    return game_world
+
+            get_editor_world = getattr(subsystem, "get_editor_world", None)
+            if callable(get_editor_world):
+                editor_world = get_editor_world()
+                if editor_world is not None:
+                    return editor_world
+
+    if editor_level_library is not None:
+        get_editor_world = getattr(editor_level_library, "get_editor_world", None)
+        if callable(get_editor_world):
+            return get_editor_world()
+
+    return None
+
+
+def _execute_editor_console_command(command: str) -> bool:
+    """
+    Execute a console command against the active PIE/game world when possible.
+    Returns False if no suitable world is available so callers can avoid retry loops.
+    """
+
+    if unreal is None:
+        return False
+
+    command_world = _get_command_world()
+    if command_world is None:
+        logger.warning(
+            "Render Executor: Unable to execute console command '%s' because no active "
+            "editor or PIE world is available",
+            command,
+        )
+        return False
+
+    unreal.SystemLibrary.execute_console_command(command_world, command)
+    logger.info(f"Render Executor: Executed console command: {command}")
+    return True
+
+
 if unreal:
 
     @unreal.uclass()
     class RemoteRenderMoviePipelineEditorExecutor(unreal.MoviePipelinePIEExecutor):
         totalFrameRange = unreal.uproperty(int)  # Total frame range of the job's level sequence
         currentFrame = unreal.uproperty(int)  # Current frame handler that will be updating later
+        csvCaptureFrames = unreal.uproperty(int)
+        csvFramesObserved = unreal.uproperty(int)
+        csvStartAttempted = unreal.uproperty(bool)
+        csvStarted = unreal.uproperty(bool)
+        csvFinished = unreal.uproperty(bool)
 
         def _post_init(self):
             """
@@ -35,6 +111,37 @@ if unreal:
             """
             self.totalFrameRange = 0
             self.currentFrame = 0
+            self.csvCaptureFrames = 0
+            self.csvFramesObserved = 0
+            self.csvStartAttempted = False
+            self.csvStarted = False
+            self.csvFinished = False
+
+        def _start_csv_capture(self):
+            if self.csvCaptureFrames <= 0 or self.csvStartAttempted or self.csvFinished:
+                return
+
+            self.csvStartAttempted = True
+            if not _execute_editor_console_command("CsvProfile Start"):
+                self.csvFinished = True
+                return
+
+            self.csvStarted = True
+            self.csvFramesObserved = 0
+            logger.info(
+                f"Render Executor: Started CSV capture for {self.csvCaptureFrames} render frame(s)"
+            )
+
+        def _stop_csv_capture(self, reason: str):
+            if self.csvFinished:
+                return
+
+            if self.csvStarted:
+                _execute_editor_console_command("CsvProfile Stop")
+                logger.info(f"Render Executor: Stopped CSV capture ({reason})")
+
+            self.csvStarted = False
+            self.csvFinished = True
 
         @unreal.ufunction(override=True)
         def execute(self, queue: unreal.MoviePipelineQueue):
@@ -124,8 +231,14 @@ if unreal:
             # Since PIEExecutor launching Play in Editor before mrq is rendering, we should ensure, that
             # executor actually rendering the sequence.
             if self.is_rendering():
+                self._start_csv_capture()
                 self.currentFrame += 1
                 progress = self.currentFrame / self.totalFrameRange * 100
+
+                if self.csvStarted and not self.csvFinished:
+                    self.csvFramesObserved += 1
+                    if self.csvFramesObserved >= self.csvCaptureFrames:
+                        self._stop_csv_capture("captured requested frame count")
 
                 # Executor work with the render queue after all frames are rendered - do all
                 # support stuff, handle safe quit, etc, so we should ignore progress that more than 100.
@@ -136,6 +249,24 @@ if unreal:
 class UnrealRenderStepHandler(BaseStepHandler):
     cached_frame_range_start = None
     cached_frame_range_end = None
+
+    @staticmethod
+    def _get_csv_capture_frames(args: dict) -> int:
+        value = args.get("csv_capture_frames")
+        if value is None:
+            return 0
+
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            logger.warning("Ignoring invalid csv_capture_frames value: %s", value)
+            return 0
+
+    @staticmethod
+    def _stop_executor_csv_capture(executor, reason: str) -> None:
+        stop_csv_capture = getattr(executor, "_stop_csv_capture", None)
+        if callable(stop_csv_capture):
+            stop_csv_capture(reason)
 
     @staticmethod
     def regex_pattern_progress() -> list[re.Pattern]:
@@ -180,6 +311,7 @@ class UnrealRenderStepHandler(BaseStepHandler):
         :param is_fatal: Whether the error is fatal or not
         :param error: The error message
         """
+        UnrealRenderStepHandler._stop_executor_csv_capture(executor, "render error")
         logger.error(f"Render Executor: Error: {error}")
 
     @staticmethod
@@ -190,6 +322,7 @@ class UnrealRenderStepHandler(BaseStepHandler):
         :param pipeline_executor: The RemoteRenderMoviePipelineEditorExecutor instance
         :param success: Whether finished successfully or not
         """
+        UnrealRenderStepHandler._stop_executor_csv_capture(pipeline_executor, "render completed")
         logger.info("Render Executor: Rendering is complete")
 
     @staticmethod
@@ -639,6 +772,12 @@ class UnrealRenderStepHandler(BaseStepHandler):
 
         # Initialize Render executor
         executor = RemoteRenderMoviePipelineEditorExecutor()
+        executor.csvCaptureFrames = self._get_csv_capture_frames(args)
+        if executor.csvCaptureFrames > 0:
+            logger.info(
+                "Render Executor: CSV capture will start when rendering begins for "
+                f"{executor.csvCaptureFrames} frame(s)"
+            )
 
         # Add callbacks on complete and error actions to handle it and
         # provide output to the Deadline Adaptor

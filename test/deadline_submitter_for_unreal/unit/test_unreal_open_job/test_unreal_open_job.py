@@ -835,22 +835,22 @@ class TestRenderUnrealOpenJob:
         file_data = create_deadline_cloud_temp_file_mock.call_args.kwargs["file_data"]
         _, switches, params = parse_command_line(file_data)
 
-        assert {
-            p["name"]: p["value"] for p in parameter_values
-        }[OpenJobParameterNames.UNREAL_EXTRA_CMD_ARGS] == ""
-        assert {
-            p["name"]: p["value"] for p in parameter_values
-        }[OpenJobParameterNames.UNREAL_EXTRA_CMD_ARGS_FILE] == "/tmp/ExtraCmdArgsFile.txt"
-        assert {
-            p["name"]: p["value"] for p in parameter_values
-        }[OpenJobParameterNames.UNREAL_PROJECT_PATH] == "/project dir/MyProject.uproject"
-        assert {
-            p["name"]: p["value"] for p in parameter_values
-        }[OpenJobParameterNames.MARKETPLACE_PLUGINS_DIR] == "/Engine/Plugins/Marketplace"
+        assert {p["name"]: p["value"] for p in parameter_values}[
+            OpenJobParameterNames.UNREAL_EXTRA_CMD_ARGS
+        ] == ""
+        assert {p["name"]: p["value"] for p in parameter_values}[
+            OpenJobParameterNames.UNREAL_EXTRA_CMD_ARGS_FILE
+        ] == "/tmp/ExtraCmdArgsFile.txt"
+        assert {p["name"]: p["value"] for p in parameter_values}[
+            OpenJobParameterNames.UNREAL_PROJECT_PATH
+        ] == "/project dir/MyProject.uproject"
+        assert {p["name"]: p["value"] for p in parameter_values}[
+            OpenJobParameterNames.MARKETPLACE_PLUGINS_DIR
+        ] == "/Engine/Plugins/Marketplace"
         assert set(switches) == {"stdout", "csvGpuStats"}
         assert params["trace"] == "gpu,cpu,frame,bookmark,loadtime,memory"
         assert "tracefile" not in params
-        assert params["csvCaptureFrames"] == "120"
+        assert "csvCaptureFrames" not in params
         assert "ExecCmds" not in params
         assert "/tmp/ExtraCmdArgsFile.txt" in render_job._asset_references.input_filenames
 
