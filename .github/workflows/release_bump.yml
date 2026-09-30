@@ -1,9 +1,17 @@
 name: Conda Gate PoC
-run-name: "CondaPoC|cinema4d-openjd|${{ inputs.version }}|linux-64,win-64|${{ inputs.recipe_commit }}"
+run-name: "CondaPoC|${{ inputs.mode }}|cinema4d-openjd|${{ inputs.version }}|linux-64,win-64|${{ inputs.recipe_commit }}"
 
 on:
   workflow_dispatch:
     inputs:
+      mode:
+        description: Synthetic dev events or the supplied native C4D pipeline change
+        required: true
+        default: native
+        type: choice
+        options:
+          - native
+          - synthetic
       version:
         description: Example C4D adaptor version to check in the public manifest
         required: true
@@ -26,11 +34,17 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           VERSION: ${{ inputs.version }}
           RECIPE_COMMIT: ${{ inputs.recipe_commit }}
+          MODE: ${{ inputs.mode }}
         shell: bash
         run: |
           test "$REPOSITORY" = "kavmur/deadline-cloud-for-unreal-engine"
           [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           [[ "$RECIPE_COMMIT" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$MODE" = native || "$MODE" = synthetic ]]
+          if [[ "$MODE" = native ]]; then
+            test "$VERSION" = "1.0.0"
+            test "$RECIPE_COMMIT" = "dbc23ab0837653f563f24043bfadf77e53f459f5"
+          fi
           printf 'Dev-only Conda gate PoC. No releases or AWS test jobs will be submitted.\n'
   WaitForConda:
     needs: ValidateExample
