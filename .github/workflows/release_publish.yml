@@ -1,120 +1,269 @@
-name: "Release: Publish"
-run-name: "Release: Publish ${{ inputs.tag || 'next pending release' }}"
+name: "Release: Stage and Publish"
+run-name: >-
+  ${{ github.repository == 'kavmur/deadline-cloud-for-unreal-engine' &&
+      format('CondaPoC|{0}|cinema4d-openjd|{1}|linux-64,win-64|{2}', inputs.conda_event_mode, inputs.conda_version, inputs.recipe_commit) ||
+      format('Release: Stage and Publish {0}', inputs.tag || github.sha) }}
 
 on:
-  schedule:
-    - cron: "17 */6 * * *"
+  push:
+    branches: [mainline]
+    paths: [CHANGELOG.md]
   workflow_dispatch:
     inputs:
       tag:
-        description: Specific staged release tag to publish
+        description: Existing release tag for a production rerun
         required: false
         type: string
+      test_mode:
+        description: Personal-fork package build and publication preview
+        default: true
+        type: boolean
+      conda_event_mode:
+        description: Dev gate event mode (fork test only)
+        default: synthetic
+        type: choice
+        options: [synthetic, native]
+      conda_version:
+        description: C4D example used only to test the Conda gate
+        default: "0.12.3"
+        type: string
+      recipe_commit:
+        description: Supplied C4D recipe change used only for the dev gate
+        default: dbc23ab0837653f563f24043bfadf77e53f459f5
+        type: string
 
+# A long Conda gate must not be cancelled by a later changelog merge.
 concurrency:
-  group: release-public
+  group: release-${{ github.repository }}-${{ inputs.tag || github.sha }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
-  CheckConda:
-    if: github.repository == 'aws-deadline/deadline-cloud-for-unreal-engine'
+  ValidateContext:
     runs-on: ubuntu-latest
     outputs:
-      ready: ${{ steps.readiness.outputs.ready }}
-      tag: ${{ steps.readiness.outputs.tag }}
+      test_mode: ${{ steps.context.outputs.test_mode }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Check Conda release readiness
-        id: readiness
-        uses: aws-deadline/.github/.github/actions/check-release-readiness@mainline
-        with:
-          github-token: ${{ github.token }}
-          requested-tag: ${{ inputs.tag }}
-          package-name: unrealengine-openjd
-          required-platforms: win-64
-          timeout-days: 4
-
-  AuthorizePublish:
-    needs: CheckConda
-    if: >-
-      always() &&
-      needs.CheckConda.result == 'success' &&
-      needs.CheckConda.outputs.tag != '' &&
-      needs.CheckConda.outputs.ready == 'true'
-    runs-on: ubuntu-latest
-    permissions: {}
-    outputs:
-      tag: ${{ steps.release.outputs.tag }}
-    steps:
-      - name: Authorize public release
-        id: release
+      - name: Validate release scope
+        id: context
         env:
-          TAG: ${{ needs.CheckConda.outputs.tag }}
-        run: echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          REPOSITORY: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          TEST_MODE: ${{ inputs.test_mode || false }}
+          MODE: ${{ inputs.conda_event_mode }}
+          CONDA_VERSION: ${{ inputs.conda_version }}
+          RECIPE_COMMIT: ${{ inputs.recipe_commit }}
+          PRODUCTION_ENABLED: ${{ vars.EVENT_DRIVEN_CONDA_RELEASE_ENABLED }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$TEST_MODE" == true ]]; then
+            test "$REPOSITORY" = kavmur/deadline-cloud-for-unreal-engine
+            test "$EVENT" = workflow_dispatch
+            [[ "$MODE" == synthetic || "$MODE" == native ]]
+            [[ "$CONDA_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+            test "$RECIPE_COMMIT" = dbc23ab0837653f563f24043bfadf77e53f459f5
+            if [[ "$MODE" == native ]]; then test "$CONDA_VERSION" = 1.0.0; fi
+          else
+            test "$REPOSITORY" = aws-deadline/deadline-cloud-for-unreal-engine
+            # Provision and verify the production App protection rule before opting in.
+            test "$PRODUCTION_ENABLED" = true
+          fi
+          echo "test_mode=$TEST_MODE" >> "$GITHUB_OUTPUT"
 
-  ValidateRelease:
-    needs: AuthorizePublish
-    if: needs.AuthorizePublish.outputs.tag != ''
+  TagRelease:
+    needs: ValidateContext
+    if: needs.ValidateContext.outputs.test_mode == 'false'
     uses: aws-deadline/.github/.github/workflows/reusable_tag_release.yml@mainline
+    secrets: inherit
+    with:
+      tag: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || '' }}
+
+  ReleaseContext:
+    needs: [ValidateContext, TagRelease]
+    if: >-
+      always() && needs.ValidateContext.result == 'success' &&
+      (needs.ValidateContext.outputs.test_mode == 'true' || needs.TagRelease.result == 'success')
+    runs-on: ubuntu-latest
+    outputs:
+      ref: ${{ steps.context.outputs.ref }}
+      tag: ${{ steps.context.outputs.tag }}
+      python: ${{ steps.context.outputs.python }}
+      test_mode: ${{ needs.ValidateContext.outputs.test_mode }}
+    steps:
+      - name: Resolve immutable source
+        id: context
+        env:
+          TEST_MODE: ${{ needs.ValidateContext.outputs.test_mode }}
+          RELEASE_TAG: ${{ needs.TagRelease.outputs.tag }}
+          BUILD_PYTHON: ${{ needs.TagRelease.outputs.build-python-version }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          if [[ "$TEST_MODE" == true ]]; then
+            echo "ref=$COMMIT" >> "$GITHUB_OUTPUT"
+            echo "tag=$COMMIT" >> "$GITHUB_OUTPUT"
+            echo "python=3.11" >> "$GITHUB_OUTPUT"
+          else
+            test -n "$RELEASE_TAG"
+            echo "ref=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+            echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+            echo "python=$BUILD_PYTHON" >> "$GITHUB_OUTPUT"
+          fi
+
+  UnitTests:
+    needs: ReleaseContext
+    name: Unit tests, lint, and builds
+    uses: ./.github/workflows/code_quality.yml
+    with:
+      tag: ${{ needs.ReleaseContext.outputs.ref }}
+
+  IntegrationTests:
+    needs: ReleaseContext
+    if: needs.ReleaseContext.outputs.test_mode == 'false'
+    uses: aws-deadline/.github/.github/workflows/reusable_integration_test.yml@mainline
     permissions:
+      id-token: write
       contents: read
     secrets: inherit
     with:
-      tag: ${{ needs.AuthorizePublish.outputs.tag }}
+      repository: ${{ github.event.repository.name }}
+      environment: mainline
+      os: windows
+      tag: ${{ needs.ReleaseContext.outputs.tag }}
+      run_ui_automation: true
+
+  E2ETests:
+    needs: ReleaseContext
+    if: needs.ReleaseContext.outputs.test_mode == 'false'
+    uses: aws-deadline/.github/.github/workflows/reusable_e2e_test.yml@mainline
+    permissions:
+      id-token: write
+      contents: read
+    secrets: inherit
+    with:
+      repository: ${{ github.event.repository.name }}
+      environment: mainline
+      os: windows
+      tag: ${{ needs.ReleaseContext.outputs.tag }}
+
+  Stage:
+    needs: [ReleaseContext, UnitTests, IntegrationTests, E2ETests]
+    if: >-
+      always() && needs.ReleaseContext.outputs.test_mode == 'false' &&
+      needs.UnitTests.result == 'success' &&
+      needs.IntegrationTests.result == 'success' && needs.E2ETests.result == 'success'
+    uses: aws-deadline/.github/.github/workflows/reusable_publish_python.yml@mainline
+    permissions:
+      id-token: write
+    secrets: inherit
+    with:
+      tag: ${{ needs.ReleaseContext.outputs.tag }}
+
+  StagePreview:
+    needs: [ReleaseContext, UnitTests]
+    if: needs.ReleaseContext.outputs.test_mode == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.ReleaseContext.outputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ needs.ReleaseContext.outputs.python }}
+      - name: Build actual Unreal release packages
+        run: |
+          pip install --upgrade hatch
+          hatch -v build
+          sha256sum dist/* > release-package-sha256.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: staged-release-preview
+          if-no-files-found: error
+          path: |
+            dist/*
+            release-package-sha256.txt
+
+  WaitForConda:
+    needs: [ReleaseContext, Stage, StagePreview]
+    if: >-
+      always() && needs.ReleaseContext.result == 'success' &&
+      ((needs.ReleaseContext.outputs.test_mode == 'true' && needs.StagePreview.result == 'success') ||
+       (needs.ReleaseContext.outputs.test_mode == 'false' && needs.Stage.result == 'success'))
+    environment: ${{ needs.ReleaseContext.outputs.test_mode == 'true' && 'conda-poc' || 'conda-release' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Conda protection rule approved
+        env:
+          TEST_MODE: ${{ needs.ReleaseContext.outputs.test_mode }}
+        run: |
+          echo "### Conda gate approved" >> "$GITHUB_STEP_SUMMARY"
+          echo "Continuing this same workflow run. Test mode: $TEST_MODE." >> "$GITHUB_STEP_SUMMARY"
 
   PreRelease:
-    needs: ValidateRelease
-    if: needs.ValidateRelease.outputs.tag != ''
+    needs: [ReleaseContext, WaitForConda]
+    if: needs.ReleaseContext.outputs.test_mode == 'false'
     uses: aws-deadline/.github/.github/workflows/reusable_prerelease.yml@mainline
     permissions:
       id-token: write
       contents: write
     secrets: inherit
     with:
-      tag: ${{ needs.ValidateRelease.outputs.tag }}
+      tag: ${{ needs.ReleaseContext.outputs.tag }}
 
   Release:
-    needs: [ValidateRelease, PreRelease]
-    if: needs.ValidateRelease.outputs.tag != ''
+    needs: [ReleaseContext, PreRelease]
+    if: needs.ReleaseContext.outputs.test_mode == 'false'
     uses: aws-deadline/.github/.github/workflows/reusable_release.yml@mainline
-    secrets: inherit
     permissions:
       id-token: write
       contents: write
+    secrets: inherit
     with:
-      tag: ${{ needs.ValidateRelease.outputs.tag }}
+      tag: ${{ needs.ReleaseContext.outputs.tag }}
 
   PublishToPyPI:
-    needs: [ValidateRelease, Release]
-    if: needs.ValidateRelease.outputs.tag != ''
+    needs: [ReleaseContext, Release]
+    if: needs.ReleaseContext.outputs.test_mode == 'false'
     runs-on: ubuntu-latest
     environment: release
     permissions:
       id-token: write
       contents: read
     steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.ValidateRelease.outputs.tag }}
+          ref: ${{ needs.ReleaseContext.outputs.ref }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: ${{ needs.ValidateRelease.outputs.build-python-version }}
-      - name: Install dependencies
-        run: pip install --upgrade hatch
-      - name: Build
-        run: hatch -v build
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+          python-version: ${{ needs.ReleaseContext.outputs.python }}
+      - run: pip install --upgrade hatch
+      - run: hatch -v build
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           skip-existing: true
+
+  PublishPreview:
+    needs: [ReleaseContext, WaitForConda]
+    if: needs.ReleaseContext.outputs.test_mode == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: staged-release-preview
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ needs.ReleaseContext.outputs.python }}
+      - name: Validate the exact staged artifacts after the gate
+        run: |
+          sha256sum --check release-package-sha256.txt
+          pip install --upgrade twine
+          python -m twine check dist/*
+          echo "### Release publication preview passed" >> "$GITHUB_STEP_SUMMARY"
+          echo "Real Unreal packages built, preserved through the Conda gate, and validated in this same run." >> "$GITHUB_STEP_SUMMARY"
+          echo "AWS integration/UI/E2E tests, CodeArtifact staging, signing, GitHub release creation and PyPI upload were not executed." >> "$GITHUB_STEP_SUMMARY"
