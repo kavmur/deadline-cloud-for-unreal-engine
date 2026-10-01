@@ -1589,7 +1589,6 @@ def delete_fleets_util(deadline_client: BaseClient, fleet_responses: List[Dict[s
 def reusable_fleet_id(
     deadline_client: BaseClient,
     reusable_farm_id: str,
-    worker_role_arn: str,
     request,
 ) -> Generator[str, None, None]:
     """
@@ -1598,7 +1597,6 @@ def reusable_fleet_id(
     Args:
         deadline_client: The Deadline Cloud client
         reusable_farm_id: The farm ID
-        worker_role_arn: The ARN of the IAM role to use for the fleet
         request: The pytest request object
 
     Yields:
@@ -1639,6 +1637,7 @@ def reusable_fleet_id(
 
             # Create a new fleet if none exists
             logger.info(f"Creating new test fleet in farm {reusable_farm_id}...")
+            worker_role_arn = request.getfixturevalue("worker_role_arn")
             fleet_response = create_fleet_util(
                 deadline_client,
                 worker_role_arn,
@@ -1941,6 +1940,12 @@ def deadline_worker_agent(
     )
     logger.info(f"Using agent at: {agent_path}")
 
+    if sys.platform == "win32":
+        openjd_data_dir = os.path.join(
+            os.environ.get("PROGRAMDATA", r"C:\ProgramData"), "Amazon", "OpenJD"
+        )
+        os.makedirs(openjd_data_dir, exist_ok=True)
+
     # Create a log file for the worker agent
     log_dir = os.path.join(os.getcwd(), "logs")
     os.makedirs(log_dir, exist_ok=True)
@@ -1973,6 +1978,20 @@ def deadline_worker_agent(
     env["PYTHONIOENCODING"] = "utf-8"
     env["TERM"] = "dumb"
     env["NO_COLOR"] = "1"
+    if sys.platform == "win32" and env.get("USERNAME", "").endswith("$"):
+        # SSM exposes the computer account in USERNAME even when its process
+        # token is SYSTEM. The worker needs the token's account for directory ACLs.
+        env["USERNAME"] = subprocess.check_output(["whoami"], text=True).strip().rsplit("\\", 1)[-1]
+    if os.environ.get("RUN_PERFORCE_E2E", "").lower() == "true":
+        for test_name, p4_name in (
+            ("DEADLINE_P4_TEST_PORT", "P4PORT"),
+            ("DEADLINE_P4_TEST_USER", "P4USER"),
+            ("DEADLINE_P4_TEST_PASSWD", "P4PASSWD"),
+        ):
+            if os.environ.get(test_name):
+                env[p4_name] = os.environ[test_name]
+        if os.environ.get("DEADLINE_P4_TEST_PASSWORD"):
+            env["P4PASSWD"] = os.environ["DEADLINE_P4_TEST_PASSWORD"]
 
     # Add UE binaries to PATH so the adaptor can find UnrealEditor-Cmd.
     ue_bin_dir = os.path.join(
@@ -2105,7 +2124,7 @@ def reusable_queue_fleet_association(
         logger.info(
             f"✓ Found existing queue-fleet association between queue {reusable_queue_id} and fleet {reusable_fleet_id}"
         )
-    except Exception:
+    except deadline_client.exceptions.ResourceNotFoundException:
         # Create new association if it doesn't exist
         logger.info(
             f"No existing queue-fleet association found. Creating new association between queue {reusable_queue_id} and fleet {reusable_fleet_id}..."

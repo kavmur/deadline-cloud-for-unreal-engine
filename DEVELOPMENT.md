@@ -35,6 +35,22 @@ End to end tests validate a more complete render job workflow than our unit test
 hatch run e2e -s
 ```
 
+### Run the Perforce render E2E test
+
+Run this test on a Windows host with Unreal Engine and a CMF worker agent. The host must be able to reach a Perforce server with a `depot` depot, and the Perforce user must be able to create clients, submit files, and obliterate the test's unique depot prefix during cleanup. Set `RUN_PERFORCE_E2E=true`, `DEADLINE_P4_TEST_PORT`, `DEADLINE_P4_TEST_USER`, and `DEADLINE_P4_TEST_PASSWD` in the test environment. The test also accepts the corresponding `P4PORT`, `P4USER`, and `P4PASSWD` variables.
+
+The Windows CI E2E project gets these settings from the Unreal Perforce test infrastructure. For a dev run, select an existing fleet with `UNREAL_WORKER_FLEET_ID` and pass the farm, queue, and Unreal version to Hatch:
+
+```powershell
+$env:UNREAL_WORKER_FLEET_ID = "fleet-<dev-fleet-id>"
+hatch run e2e -s -k test_perforce_render_job_succeeds --ueversion 5.8 `
+    --farm-id farm-<dev-farm-id> --queue-id queue-<dev-queue-id>
+```
+
+The host's AWS role needs permission to read the queue–fleet association, submit and inspect jobs, register a worker, and assume the fleet and queue roles. The farm, queue, and fleet must be in the test's region (`TEST_TARGET_REGION`, default `us-west-2`).
+
+The test creates a new depot prefix for each run, renders one frame, verifies the aggregated Perforce output under `<project>/Saved/<output folder name>`, and removes that prefix after the job and its sessions end. After a successful plugin build, add `--nobuild` when rerunning unchanged plugin code.
+
 ### Run linting
 
 ```bash
