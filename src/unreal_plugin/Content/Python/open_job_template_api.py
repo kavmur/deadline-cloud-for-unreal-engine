@@ -138,17 +138,19 @@ class PythonYamlLibraryImplementation(unreal.PythonYamlLibrary):
 
         :return: list of unreal.ParameterDefinition
         """
+        self.job_file_read_succeeded = False
         with open(path, "r") as f:
             job_template = yaml.safe_load(f)
 
         u_parameter_definitions: list[unreal.ParameterDefinition] = []
 
-        for parameter_definition in job_template["parameterDefinitions"]:
+        for parameter_definition in job_template.get("parameterDefinitions", []):
             u_param = PythonYamlLibraryImplementation.job_parameter_to_u_parameter_definition(
                 parameter_definition
             )
             u_parameter_definitions.append(u_param.copy())
 
+        self.job_file_read_succeeded = True
         return u_parameter_definitions
 
     @staticmethod

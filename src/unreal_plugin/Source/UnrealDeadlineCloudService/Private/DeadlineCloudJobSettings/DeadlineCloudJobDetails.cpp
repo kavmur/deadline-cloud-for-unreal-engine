@@ -431,6 +431,25 @@ void FDeadlineCloudJobParametersArrayBuilder::GenerateWrapperStructHeaderRowCont
         ];
 }
 
+const FString* FDeadlineCloudJobParametersArrayBuilder::GetMrqDefaultValue(const FString& ParameterName) const
+{
+    if (!bMrqDefaultsLoaded)
+    {
+        if (MrqJob && IsValid(MrqJob->JobPreset))
+        {
+            if (auto* Library = UPythonYamlLibrary::Get())
+            {
+                bMrqDefaultsLoaded = true;
+                for (const auto& Parameter : Library->OpenJobFile(MrqJob->JobPreset->PathToTemplate.FilePath))
+                {
+                    MrqDefaults.Add(Parameter.Name, Parameter.Value);
+                }
+            }
+        }
+    }
+    return MrqDefaults.Find(ParameterName);
+}
+
 bool FDeadlineCloudJobParametersArrayBuilder::IsResetToDefaultVisible(TSharedPtr<IPropertyHandle> PropertyHandle, FString InParameterName) const
 {
     if (!PropertyHandle.IsValid())
@@ -438,8 +457,15 @@ bool FDeadlineCloudJobParametersArrayBuilder::IsResetToDefaultVisible(TSharedPtr
         return false;
     }
 
-    auto OuterJob = FDeadlineCloudDetailsWidgetsHelper::GetPropertyOuter<UDeadlineCloudJob>(PropertyHandle.ToSharedRef());
+    if (MrqJob)
+    {
+        const FString* DefaultValue = GetMrqDefaultValue(InParameterName);
+        FString CurrentValue;
+        PropertyHandle->GetValue(CurrentValue);
+        return DefaultValue && !CurrentValue.Equals(*DefaultValue);
+    }
 
+    auto OuterJob = FDeadlineCloudDetailsWidgetsHelper::GetPropertyOuter<UDeadlineCloudJob>(PropertyHandle.ToSharedRef());
     if (!IsValid(OuterJob))
     {
         return false;
@@ -459,8 +485,16 @@ void FDeadlineCloudJobParametersArrayBuilder::ResetToDefaultHandler(TSharedPtr<I
         return;
     }
 
-    auto OuterJob = FDeadlineCloudDetailsWidgetsHelper::GetPropertyOuter<UDeadlineCloudJob>(PropertyHandle.ToSharedRef());
+    if (MrqJob)
+    {
+        if (const FString* DefaultValue = GetMrqDefaultValue(InParameterName))
+        {
+            PropertyHandle->SetValue(*DefaultValue);
+        }
+        return;
+    }
 
+    auto OuterJob = FDeadlineCloudDetailsWidgetsHelper::GetPropertyOuter<UDeadlineCloudJob>(PropertyHandle.ToSharedRef());
     if (!IsValid(OuterJob))
     {
         return;
@@ -533,7 +567,7 @@ void FDeadlineCloudJobParametersArrayBuilder::OnGenerateEntry(TSharedRef<IProper
 
     auto OuterJob = FDeadlineCloudDetailsWidgetsHelper::GetPropertyOuter<UDeadlineCloudJob>(ElementProperty);
   
-    if (IsValid(OuterJob))
+    if (IsValid(OuterJob) || (MrqJob && IsValid(MrqJob->JobPreset)))
     {
         const FResetToDefaultOverride ResetDefaultOverride = FResetToDefaultOverride::Create(
             FIsResetToDefaultVisible::CreateSP(this, &FDeadlineCloudJobParametersArrayBuilder::IsResetToDefaultVisible, ParameterName),

@@ -4,6 +4,7 @@ import unreal
 
 from deadline.unreal_logger import get_logger
 from deadline.unreal_submitter.submitter import UnrealMrqJobSubmitter
+from deadline.unreal_submitter._version import version
 from deadline.unreal_submitter.unreal_open_job.unreal_open_job_dynamic_chunking import (
     DynamicChunkingHelper,
 )
@@ -30,6 +31,13 @@ class MoviePipelineDeadlineCloudRemoteExecutor(unreal.MoviePipelinePythonHostExe
         logger.info(f"Queue has {len(pipeline_queue.get_jobs())} jobs")
 
         if not pipeline_queue or (not pipeline_queue.get_jobs()):
+            self.on_executor_finished_impl()
+            return
+
+        if not unreal.MoviePipelineDeadlineCloudExecutorJob.check_for_template_updates(
+            pipeline_queue, version, True
+        ):
+            logger.warning("Template parameter update was not completed; submission canceled.")
             self.on_executor_finished_impl()
             return
 

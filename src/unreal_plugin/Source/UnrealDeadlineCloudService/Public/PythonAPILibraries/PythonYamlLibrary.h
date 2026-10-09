@@ -205,6 +205,9 @@ public:
 	FString ReadName(const FString& Path);
 
 	// job
+	UPROPERTY(BlueprintReadWrite, Category = "PythonAPI")
+	bool bJobFileReadSucceeded = false;
+
 	UFUNCTION(BlueprintImplementableEvent)
 	TArray <FParameterDefinition> OpenJobFile(const FString& Path);
 

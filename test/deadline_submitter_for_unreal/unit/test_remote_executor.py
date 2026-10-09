@@ -185,6 +185,9 @@ parameterSpace:
         call(dynamic_chunking_unpopulated_shots_job),
     ]
     submitter.submit_jobs.assert_called_once_with()
+    remote_executor.unreal.MoviePipelineDeadlineCloudExecutorJob.check_for_template_updates.assert_called_once_with(
+        queue, remote_executor.version, True
+    )
     for job in [
         eligible_job,
         disabled_job,
@@ -266,3 +269,21 @@ def test__is_frame_based_job_returns_false_without_job_preset(remote_executor):
 
     assert not remote_executor.MoviePipelineDeadlineCloudRemoteExecutor._is_frame_based_job(job)
     job.get_parameter_definition_with_overrides.assert_not_called()
+
+
+def test_template_update_declined_cancels_submission(remote_executor):
+    queue = MagicMock()
+    queue.get_jobs.return_value = [_job("Saved", enabled=True, shot_states=(True,))]
+    check = remote_executor.unreal.MoviePipelineDeadlineCloudExecutorJob.check_for_template_updates
+    check.return_value = False
+    executor = remote_executor.MoviePipelineDeadlineCloudRemoteExecutor()
+    executor.on_executor_finished_impl = MagicMock()
+    executor.check_dirty_packages = MagicMock()
+
+    with patch.object(remote_executor, "UnrealMrqJobSubmitter") as submitter:
+        executor.execute_delayed(queue)
+
+    check.assert_called_once_with(queue, remote_executor.version, True)
+    executor.on_executor_finished_impl.assert_called_once_with()
+    executor.check_dirty_packages.assert_not_called()
+    submitter.assert_not_called()
